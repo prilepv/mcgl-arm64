@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>ru</string>
+    <key>CFBundleDisplayName</key>
+    <string>Minecraft Galaxy ARM64</string>
+    <key>CFBundleExecutable</key>
+    <string>MCGL ARM64 Runtime</string>
+    <key>CFBundleIconFile</key>
+    <string>app.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>community.mcgl.arm64-port.runtime</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Minecraft Galaxy ARM64</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.6.3</string>
+    <key>CFBundleVersion</key>
+    <string>163</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <false/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Minecraft Galaxy не использует микрофон; разрешение не запрашивается.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>
