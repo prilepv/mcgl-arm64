@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 workspace_dir=${script_dir:h:h}
-version=1.6.4
+version=1.6.5
 release_name="Minecraft-Galaxy-ARM64-Bootstrap-${version}"
 release_dir="$workspace_dir/dist/$release_name"
 app_dir="$release_dir/Minecraft Galaxy ARM64.app"
@@ -13,7 +13,18 @@ java_source="$script_dir/zulu8-arm64/Contents/Home"
 bootstrap_build="$script_dir/bootstrap-build"
 runtime_app="$resources_dir/MCGL ARM64 Runtime.app"
 runtime_executable="$runtime_app/Contents/MacOS/MCGL ARM64 Runtime"
-icon_source="$script_dir/game-runtime/MCGL Game Runtime.app/Contents/Resources/app.icns"
+icon_source="$script_dir/native-launcher/Assets/app-icon.png"
+background_source="$script_dir/native-launcher/Assets/launcher-background.png"
+
+icon_work=$(mktemp -d /private/tmp/mcgl-icon.XXXXXX)
+lwjgl_patch_classes=""
+cleanup() {
+    rm -rf -- "$icon_work"
+    if [[ -n "$lwjgl_patch_classes" ]]; then
+        rm -rf -- "$lwjgl_patch_classes"
+    fi
+}
+trap cleanup EXIT
 
 if [[ -e "$release_dir" ]]; then
     print -u2 "Release directory already exists: $release_dir"
@@ -30,12 +41,30 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$script_dir/native-launcher/MCGLNativeLauncher.swift" \
     "$script_dir/native-launcher/MCGLLauncherPreferences.swift" \
     "$script_dir/native-launcher/MCGLInstaller.swift" \
+    "$script_dir/native-launcher/MCGLLauncherUpdater.swift" \
     -o "$contents_dir/MacOS/MCGL ARM64 Launcher"
 
 ditto "$script_dir/native-launcher/Info.plist" "$contents_dir/Info.plist"
 ditto "$script_dir/arm64-runtime/Info.plist" "$runtime_app/Contents/Info.plist"
-ditto "$icon_source" "$runtime_app/Contents/Resources/app.icns"
-ditto "$icon_source" "$resources_dir/app.icns"
+iconset="$icon_work/app.iconset"
+mkdir -p "$iconset"
+sips -z 16 16 "$icon_source" --out "$iconset/icon_16x16.png" >/dev/null
+sips -z 32 32 "$icon_source" --out "$iconset/icon_16x16@2x.png" >/dev/null
+sips -z 32 32 "$icon_source" --out "$iconset/icon_32x32.png" >/dev/null
+sips -z 64 64 "$icon_source" --out "$iconset/icon_32x32@2x.png" >/dev/null
+sips -z 128 128 "$icon_source" --out "$iconset/icon_128x128.png" >/dev/null
+sips -z 256 256 "$icon_source" --out "$iconset/icon_128x128@2x.png" >/dev/null
+sips -z 256 256 "$icon_source" --out "$iconset/icon_256x256.png" >/dev/null
+sips -z 512 512 "$icon_source" --out "$iconset/icon_256x256@2x.png" >/dev/null
+sips -z 512 512 "$icon_source" --out "$iconset/icon_512x512.png" >/dev/null
+sips -z 1024 1024 "$icon_source" --out "$iconset/icon_512x512@2x.png" >/dev/null
+swiftc -parse-as-library -swift-version 5 -module-cache-path "$icon_work/modules" \
+    "$script_dir/tools/BuildICNS.swift" \
+    -o "$icon_work/build-icns"
+"$icon_work/build-icns" "$iconset" "$icon_work/app.icns"
+ditto "$icon_work/app.icns" "$runtime_app/Contents/Resources/app.icns"
+ditto "$icon_work/app.icns" "$resources_dir/app.icns"
+ditto "$background_source" "$resources_dir/launcher-background.png"
 
 xcrun clang -x objective-c -arch arm64 -mmacosx-version-min=14.0 \
     -I"$java_source/include" -I"$java_source/include/darwin" \
@@ -68,8 +97,7 @@ ditto "$script_dir/lwjgl2-modern/bin/lwjgl/liblwjgl.dylib" \
     "$resources_dir/PortSupport/bin/natives/liblwjgl.dylib"
 
 lwjgl_patch_classes=$(mktemp -d /private/tmp/mcgl-lwjgl-classes.XXXXXX)
-trap 'rm -rf -- "$lwjgl_patch_classes"' EXIT
-"$java_source/bin/javac" -source 1.8 -target 1.8 \
+"$java_source/bin/javac" -encoding UTF-8 -source 1.8 -target 1.8 \
     -classpath "$resources_dir/PortSupport/bin/lwjgl.jar" \
     -d "$lwjgl_patch_classes" \
     "$script_dir/lwjgl2-modern/src/java/org/lwjgl/opengl/Display.java" \
@@ -92,6 +120,7 @@ trap 'rm -rf -- "$lwjgl_patch_classes"' EXIT
     "$script_dir/tools/PatchMCGLLightmap.java" \
     "$script_dir/tools/PatchMCGLChunkVbo.java" \
     "$script_dir/tools/PatchMCGLQuadSort.java" \
+    "$script_dir/tools/PatchMCGLTransparency.java" \
     "$script_dir/performance-patch/src/local/mcgl/perf/ChunkVbo.java" \
     "$script_dir/performance-patch/src/local/mcgl/perf/QuadSort.java" \
     "$script_dir/performance-patch/src/local/mcgl/perf/ParticleList.java" \

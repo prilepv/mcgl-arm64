@@ -27,7 +27,26 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework Cocoa -framework CryptoKit \
     "$source_root/native-launcher/MCGLNativeLauncher.swift" \
     "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
-    "$source_root/native-launcher/MCGLInstaller.swift" -o "$result_dir/launcher"
+    "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLLauncherUpdater.swift" -o "$result_dir/launcher"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework CryptoKit \
+    "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
+    "$source_root/tests/LauncherUpdaterTest.swift" -o "$result_dir/updater-test"
+"$result_dir/updater-test"
+swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" \
+    "$source_root/tools/BuildICNS.swift" -o "$result_dir/build-icns"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" \
+    "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
+    "$source_root/tests/LauncherPreferencesTest.swift" -o "$result_dir/preferences-test"
+"$result_dir/preferences-test"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework CryptoKit \
+    "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/tests/InstallerMigrationTest.swift" -o "$result_dir/installer-migration-test"
+"$result_dir/installer-migration-test"
 xcrun clang -x objective-c -arch arm64 -mmacosx-version-min=14.0 \
     -I"$jdk_root/include" -I"$jdk_root/include/darwin" -framework Cocoa -framework OpenGL \
     "$source_root/arm64-runtime/MCGLARM64Runtime.c" -o "$result_dir/runtime"
@@ -79,6 +98,7 @@ if [[ $# == 4 ]]; then
         "$source_root/awt-patch/src/local/mcgl/DirectLauncher.java"
     run_test QuadSortTest "$3"
     run_test ChunkVboPatchTest "$3"
+    run_test TransparencyPatchTest "$3"
     run_test LightmapPatchTest "$3"
     run_test AnimationPipelineTest "$3"
     for profile in false true; do

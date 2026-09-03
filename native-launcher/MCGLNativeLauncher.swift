@@ -1,14 +1,49 @@
 import Cocoa
 import Darwin
 
+final class LauncherBackgroundView: NSView {
+    private let artwork: NSImage?
+
+    init(artwork: NSImage?) {
+        self.artwork = artwork
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSColor(calibratedRed: 0.055, green: 0.045, blue: 0.035, alpha: 1).setFill()
+        bounds.fill()
+        if let artwork, artwork.size.width > 0, artwork.size.height > 0 {
+            let imageRatio = artwork.size.width / artwork.size.height
+            let viewRatio = bounds.width / bounds.height
+            let source: NSRect
+            if imageRatio > viewRatio {
+                let width = artwork.size.height * viewRatio
+                source = NSRect(x: (artwork.size.width - width) / 2, y: 0,
+                                width: width, height: artwork.size.height)
+            } else {
+                let height = artwork.size.width / viewRatio
+                source = NSRect(x: 0, y: (artwork.size.height - height) / 2,
+                                width: artwork.size.width, height: height)
+            }
+            artwork.draw(in: bounds, from: source, operation: .sourceOver, fraction: 0.78)
+        }
+        NSColor(calibratedRed: 0.045, green: 0.035, blue: 0.025, alpha: 0.28).setFill()
+        bounds.fill(using: .sourceOver)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
     private let preferences: MCGLLauncherPreferences
+    private let updater = MCGLLauncherUpdater()
 
     init(preferences: MCGLLauncherPreferences = MCGLLauncherPreferences()) {
         self.preferences = preferences
         super.init()
     }
-    private let supportedMemoryMB = [1024, 2048, 4096, 6144, 8192]
     private lazy var resourcesRoot: URL = {
         guard let resourceURL = Bundle.main.resourceURL else {
             fatalError("Application resources are unavailable")
@@ -54,12 +89,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private var fpsPopUp: NSPopUpButton!
     private var launchButton: NSButton!
     private var stopButton: NSButton!
-    private var memoryPopUp: NSPopUpButton!
-    private var preallocateMemoryButton: NSButton!
+    private var initialMemoryPopUp: NSPopUpButton!
+    private var maximumMemoryPopUp: NSPopUpButton!
     private var multicoreButton: NSButton!
     private var graphicsDiagnosticsButton: NSButton!
     private var chunkVboButton: NSButton!
     private var statusLabel: NSTextField!
+    private var updateButton: NSButton!
+    private var updateStatusLabel: NSTextField!
     private var logView: NSTextView!
     private var gameApplication: NSRunningApplication?
     private var installer: MCGLInstaller?
@@ -69,9 +106,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildWindow()
-        appendLog("Minecraft Galaxy ARM64 Bootstrap 1.6.4 готов к запуску.")
+        appendLog("Minecraft Galaxy ARM64 Bootstrap \(MCGLLauncherUpdater.currentVersion) готов к запуску.")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        checkForLauncherUpdates(silent: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -87,27 +125,106 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 703),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 660),
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Minecraft Galaxy — ARM64"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
         window.center()
         window.delegate = self
         window.isReleasedWhenClosed = false
 
-        let content = NSView()
+        let artworkURL = resourcesRoot.appendingPathComponent("launcher-background.png")
+        let content = LauncherBackgroundView(artwork: NSImage(contentsOf: artworkURL))
         content.translatesAutoresizingMaskIntoConstraints = false
+        content.appearance = NSAppearance(named: .darkAqua)
         window.contentView = content
 
         let title = NSTextField(labelWithString: "Minecraft Galaxy")
-        title.font = .systemFont(ofSize: 25, weight: .semibold)
+        title.font = .systemFont(ofSize: 30, weight: .bold)
+        title.textColor = .white
 
-        let subtitle = NSTextField(labelWithString: "Полностью нативный клиент Apple Silicon · Java 8 + LWJGL 2 ARM64")
-        subtitle.textColor = .secondaryLabelColor
+        let subtitle = NSTextField(labelWithString:
+            "Неофициальный нативный порт для Apple Silicon  ·  ARM64  ·  версия \(MCGLLauncherUpdater.currentVersion)")
+        subtitle.textColor = NSColor.white.withAlphaComponent(0.72)
+
+        updateButton = NSButton(title: "Проверить обновление", target: self,
+                                action: #selector(checkForLauncherUpdate))
+        updateButton.bezelStyle = .rounded
+        updateStatusLabel = NSTextField(labelWithString: "GitHub: проверка при запуске")
+        updateStatusLabel.font = .systemFont(ofSize: 11)
+        updateStatusLabel.textColor = NSColor.white.withAlphaComponent(0.65)
+        updateStatusLabel.alignment = .right
+
+        let tabView = NSTabView()
+        tabView.controlSize = .large
+        tabView.font = .systemFont(ofSize: 13, weight: .medium)
+
+        let playTab = NSTabViewItem(identifier: "play")
+        playTab.label = "Играть"
+        playTab.view = makePlayTab()
+        tabView.addTabViewItem(playTab)
+
+        let settingsTab = NSTabViewItem(identifier: "settings")
+        settingsTab.label = "Настройки"
+        settingsTab.view = makeSettingsTab()
+        tabView.addTabViewItem(settingsTab)
+
+        let logTab = NSTabViewItem(identifier: "log")
+        logTab.label = "Журнал"
+        logTab.view = makeLogTab()
+        tabView.addTabViewItem(logTab)
+
+        let views: [NSView] = [title, subtitle, updateButton,
+                               updateStatusLabel, tabView]
+        for view in views {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(view)
+        }
+
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: content.topAnchor, constant: 42),
+            title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+
+            updateButton.topAnchor.constraint(equalTo: content.topAnchor, constant: 43),
+            updateButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -28),
+            updateButton.widthAnchor.constraint(equalToConstant: 170),
+            updateStatusLabel.topAnchor.constraint(equalTo: updateButton.bottomAnchor, constant: 3),
+            updateStatusLabel.trailingAnchor.constraint(equalTo: updateButton.trailingAnchor),
+            updateStatusLabel.widthAnchor.constraint(equalToConstant: 260),
+
+            tabView.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 18),
+            tabView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            tabView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            tabView.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -22)
+        ])
+
+        refreshMemoryControls()
+        window.initialFirstResponder = loginField.stringValue.isEmpty ? loginField : passwordField
+    }
+
+    private func makeCardView() -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor(calibratedRed: 0.10, green: 0.075,
+                                              blue: 0.05, alpha: 0.88).cgColor
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(0.13).cgColor
+        view.layer?.borderWidth = 1
+        view.layer?.cornerRadius = 14
+        return view
+    }
+
+    private func makePlayTab() -> NSView {
+        let card = makeCardView()
 
         let loginLabel = NSTextField(labelWithString: "Логин")
+        loginLabel.textColor = .white
         loginField = NSTextField()
         loginField.placeholderString = "Логин MCGL"
         loginField.bezelStyle = .roundedBezel
@@ -116,8 +233,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         loginField.delegate = self
 
         let passwordLabel = NSTextField(labelWithString: "Пароль")
+        passwordLabel.textColor = .white
         passwordField = NSSecureTextField()
-        passwordField.placeholderString = "Пароль не сохраняется"
+        passwordField.placeholderString = "Пароль MCGL"
         passwordField.bezelStyle = .roundedBezel
         passwordField.target = self
         passwordField.action = #selector(launchGame)
@@ -137,160 +255,258 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         stopButton.bezelStyle = .rounded
         stopButton.isEnabled = false
 
-        let memoryLabel = NSTextField(labelWithString: "Память")
-        memoryPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
-        memoryPopUp.addItems(withTitles: supportedMemoryMB.map { memory in
-            "\(memory) МБ (\(memory / 1024) ГБ)"
-        })
-        let savedMemory = UserDefaults.standard.integer(forKey: "MCGLMemoryLimitMB")
-        let selectedMemory = supportedMemoryMB.contains(savedMemory) ? savedMemory : 2048
-        memoryPopUp.selectItem(at: supportedMemoryMB.firstIndex(of: selectedMemory) ?? 1)
-
-        let fpsLabel = NSTextField(labelWithString: "Лимит FPS")
-        fpsPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
-        fpsPopUp.identifier = NSUserInterfaceItemIdentifier("fpsLimit")
-        fpsPopUp.addItems(withTitles: MCGLLauncherPreferences.fpsLimits.map {
-            $0 == 0 ? "Без ограничения" : "\($0) FPS"
-        })
-        fpsPopUp.selectItem(at: MCGLLauncherPreferences.fpsLimits.firstIndex(of: preferences.fpsLimit) ?? 0)
-        fpsPopUp.target = self
-        fpsPopUp.action = #selector(fpsLimitChanged)
-        fpsPopUp.toolTip = "Верхний предел FPS со следующего запуска игры. VSync и настройки клиента могут ограничивать FPS сильнее. «Без ограничения» не добавляет лимит лаунчера."
-
-        preallocateMemoryButton = NSButton(
-            checkboxWithTitle: "Заранее выделять весь выбранный объём памяти",
-            target: nil,
-            action: nil)
-        preallocateMemoryButton.state = UserDefaults.standard.bool(
-            forKey: "MCGLPreallocateMemory") ? .on : .off
-
-        multicoreButton = NSButton(
-            checkboxWithTitle: "Многопоточная оптимизация памяти (экспериментально)",
-            target: nil,
-            action: nil)
-        let savedMulticoreSetting = UserDefaults.standard.object(
-            forKey: "MCGLMulticoreMemoryProfile") as? Bool
-        multicoreButton.state = (savedMulticoreSetting ?? true) ? .on : .off
-
-        graphicsDiagnosticsButton = NSButton(
-            checkboxWithTitle: "Диагностика графики (не изменяет качество изображения)",
-            target: nil,
-            action: nil)
-        let savedGraphicsDiagnostics = UserDefaults.standard.object(
-            forKey: "MCGLGraphicsDiagnostics") as? Bool
-        graphicsDiagnosticsButton.state = (savedGraphicsDiagnostics ?? true) ? .on : .off
-
-        chunkVboButton = NSButton(checkboxWithTitle: "VBO-отрисовка чанков (экспериментально)",
-                                  target: self, action: #selector(chunkVboChanged))
-        chunkVboButton.identifier = NSUserInterfaceItemIdentifier("chunkVbo")
-        chunkVboButton.state = preferences.chunkVbo ? .on : .off
-        chunkVboButton.toolTip = "Отправка геометрии без изменения качества. В 1.6 формат вершин дополнительно кешируется через VAO, если драйвер поддерживает. Применяется при следующем запуске игры. Сними галочку для возврата к исходному рендеру. До 256 МБ дополнительных буферов вершин."
-
         statusLabel = NSTextField(labelWithString: "Готов к запуску")
-        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.textColor = NSColor(calibratedRed: 0.72, green: 0.86, blue: 0.45, alpha: 1)
 
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.borderType = .bezelBorder
-        logView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 220))
-        logView.isEditable = false
-        logView.isSelectable = true
-        logView.isVerticallyResizable = true
-        logView.isHorizontallyResizable = false
-        logView.autoresizingMask = [.width]
-        logView.minSize = NSSize(width: 0, height: 220)
-        logView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        logView.textContainer?.containerSize = NSSize(width: 640, height: CGFloat.greatestFiniteMagnitude)
-        logView.textContainer?.widthTracksTextView = true
-        logView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        logView.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 1)
-        logView.textColor = NSColor(calibratedWhite: 0.9, alpha: 1)
-        scrollView.documentView = logView
-
-        let hint = NSTextField(labelWithString: "Оставь это окно открытым, пока работает игра. Пароль не сохраняется: он передаётся через одноразовый защищённый канал.")
-        hint.textColor = .secondaryLabelColor
+        let hint = NSTextField(labelWithString: "Оставь лаунчер открытым, пока работает игра.")
+        hint.textColor = NSColor.white.withAlphaComponent(0.62)
         hint.font = .systemFont(ofSize: 11)
         hint.maximumNumberOfLines = 2
 
-        let views: [NSView] = [title, subtitle, loginLabel, loginField, passwordLabel,
-                               passwordField, rememberLoginButton, launchButton, stopButton, statusLabel,
-                               fpsLabel, fpsPopUp,
-                               memoryLabel, memoryPopUp, preallocateMemoryButton, multicoreButton,
-                               graphicsDiagnosticsButton, chunkVboButton, scrollView, hint]
+        let welcome = NSTextField(labelWithString: "Вход в Minecraft Galaxy")
+        welcome.font = .systemFont(ofSize: 20, weight: .semibold)
+        welcome.textColor = .white
+
+        let views: [NSView] = [welcome, loginLabel, loginField, passwordLabel,
+                               passwordField, rememberLoginButton, launchButton,
+                               stopButton, statusLabel, hint]
         for view in views {
             view.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(view)
+            card.addSubview(view)
         }
 
         NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
-            title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            welcome.topAnchor.constraint(equalTo: card.topAnchor, constant: 34),
+            welcome.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 42),
 
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
-            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-
-            loginLabel.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 22),
-            loginLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            loginLabel.topAnchor.constraint(equalTo: welcome.bottomAnchor, constant: 30),
+            loginLabel.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
             loginField.centerYAnchor.constraint(equalTo: loginLabel.centerYAnchor),
-            loginField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 105),
-            loginField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            loginField.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 150),
+            loginField.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -42),
+            loginField.heightAnchor.constraint(equalToConstant: 28),
 
             passwordLabel.topAnchor.constraint(equalTo: loginLabel.bottomAnchor, constant: 18),
-            passwordLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            passwordLabel.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
             passwordField.centerYAnchor.constraint(equalTo: passwordLabel.centerYAnchor),
             passwordField.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
             passwordField.trailingAnchor.constraint(equalTo: loginField.trailingAnchor),
+            passwordField.heightAnchor.constraint(equalToConstant: 28),
 
             rememberLoginButton.topAnchor.constraint(equalTo: passwordField.bottomAnchor, constant: 8),
             rememberLoginButton.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
             rememberLoginButton.trailingAnchor.constraint(lessThanOrEqualTo: loginField.trailingAnchor),
 
-            launchButton.topAnchor.constraint(equalTo: rememberLoginButton.bottomAnchor, constant: 10),
+            launchButton.topAnchor.constraint(equalTo: rememberLoginButton.bottomAnchor, constant: 24),
             launchButton.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
-            launchButton.widthAnchor.constraint(equalToConstant: 125),
+            launchButton.widthAnchor.constraint(equalToConstant: 145),
+            launchButton.heightAnchor.constraint(equalToConstant: 34),
             stopButton.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
             stopButton.leadingAnchor.constraint(equalTo: launchButton.trailingAnchor, constant: 10),
-            stopButton.widthAnchor.constraint(equalToConstant: 125),
+            stopButton.widthAnchor.constraint(equalToConstant: 145),
+            stopButton.heightAnchor.constraint(equalToConstant: 34),
             statusLabel.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: stopButton.trailingAnchor, constant: 15),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -36),
 
-            memoryLabel.topAnchor.constraint(equalTo: launchButton.bottomAnchor, constant: 15),
-            memoryLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            memoryPopUp.centerYAnchor.constraint(equalTo: memoryLabel.centerYAnchor),
-            memoryPopUp.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
-            memoryPopUp.widthAnchor.constraint(equalToConstant: 190),
-
-            fpsLabel.centerYAnchor.constraint(equalTo: memoryLabel.centerYAnchor),
-            fpsLabel.leadingAnchor.constraint(equalTo: memoryPopUp.trailingAnchor, constant: 30),
-            fpsPopUp.centerYAnchor.constraint(equalTo: memoryPopUp.centerYAnchor),
-            fpsPopUp.leadingAnchor.constraint(equalTo: fpsLabel.trailingAnchor, constant: 10),
-            fpsPopUp.widthAnchor.constraint(equalToConstant: 175),
-            fpsPopUp.trailingAnchor.constraint(lessThanOrEqualTo: loginField.trailingAnchor),
-
-            preallocateMemoryButton.topAnchor.constraint(equalTo: memoryPopUp.bottomAnchor, constant: 8),
-            preallocateMemoryButton.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
-
-            multicoreButton.topAnchor.constraint(equalTo: preallocateMemoryButton.bottomAnchor, constant: 8),
-            multicoreButton.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
-
-            graphicsDiagnosticsButton.topAnchor.constraint(equalTo: multicoreButton.bottomAnchor, constant: 8),
-            graphicsDiagnosticsButton.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
-
-            chunkVboButton.topAnchor.constraint(equalTo: graphicsDiagnosticsButton.bottomAnchor, constant: 8),
-            chunkVboButton.leadingAnchor.constraint(equalTo: loginField.leadingAnchor),
-            chunkVboButton.trailingAnchor.constraint(lessThanOrEqualTo: loginField.trailingAnchor),
-
-            scrollView.topAnchor.constraint(equalTo: chunkVboButton.bottomAnchor, constant: 12),
-            scrollView.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: loginField.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: hint.topAnchor, constant: -10),
-
-            hint.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            hint.trailingAnchor.constraint(equalTo: loginField.trailingAnchor),
-            hint.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16)
+            hint.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
+            hint.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -42),
+            hint.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -26)
         ])
+        return card
+    }
 
-        window.initialFirstResponder = loginField.stringValue.isEmpty ? loginField : passwordField
+    private func makeSettingsTab() -> NSView {
+        let card = makeCardView()
+        let memoryTitle = sectionLabel("Память Java")
+        let initialLabel = valueLabel("Начальная память")
+        let maximumLabel = valueLabel("Максимальная память")
+
+        initialMemoryPopUp = memoryPopUp(values: MCGLLauncherPreferences.initialMemoryMBValues)
+        initialMemoryPopUp.target = self
+        initialMemoryPopUp.action = #selector(initialMemoryChanged)
+        maximumMemoryPopUp = memoryPopUp(values: MCGLLauncherPreferences.maximumMemoryMBValues)
+        maximumMemoryPopUp.target = self
+        maximumMemoryPopUp.action = #selector(maximumMemoryChanged)
+
+        let memoryHint = NSTextField(wrappingLabelWithString:
+            "Начальная память резервируется сразу (Xms), максимальная задаёт предел роста (Xmx). Для обычной игры рекомендуются 512 МБ / 2048 МБ.")
+        memoryHint.textColor = NSColor.white.withAlphaComponent(0.58)
+        memoryHint.font = .systemFont(ofSize: 11)
+
+        let performanceTitle = sectionLabel("Графика и производительность")
+        let fpsLabel = valueLabel("Лимит кадров")
+        fpsPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        fpsPopUp.identifier = NSUserInterfaceItemIdentifier("fpsLimit")
+        fpsPopUp.addItems(withTitles: MCGLLauncherPreferences.fpsLimits.map {
+            $0 == 0 ? "Без ограничения" : "\($0) FPS"
+        })
+        fpsPopUp.selectItem(at: MCGLLauncherPreferences.fpsLimits.firstIndex(
+            of: preferences.fpsLimit) ?? 0)
+        fpsPopUp.target = self
+        fpsPopUp.action = #selector(fpsLimitChanged)
+        fpsPopUp.toolTip = "VSync и настройки клиента могут ограничивать FPS сильнее."
+
+        multicoreButton = NSButton(
+            checkboxWithTitle: "Многопоточная оптимизация памяти (G1GC)",
+            target: self, action: #selector(performanceOptionsChanged))
+        multicoreButton.state = preferences.multicoreMemory ? .on : .off
+        multicoreButton.toolTip = "Фоновая сборка мусора использует несколько ядер и уменьшает длинные паузы."
+
+        graphicsDiagnosticsButton = NSButton(
+            checkboxWithTitle: "Диагностика графики в журнале",
+            target: self, action: #selector(performanceOptionsChanged))
+        graphicsDiagnosticsButton.state = preferences.graphicsDiagnostics ? .on : .off
+        graphicsDiagnosticsButton.toolTip = "Добавляет техническую статистику каждые 5 секунд. Для обычной игры не требуется."
+
+        chunkVboButton = NSButton(
+            checkboxWithTitle: "VBO/VAO-отрисовка чанков",
+            target: self, action: #selector(performanceOptionsChanged))
+        chunkVboButton.identifier = NSUserInterfaceItemIdentifier("chunkVbo")
+        chunkVboButton.state = preferences.chunkVbo ? .on : .off
+        chunkVboButton.toolTip = "Ускоренная передача геометрии без снижения качества. Оригинальный рендер сохраняется как запасной путь."
+
+        let transparencyNotice = NSTextField(wrappingLabelWithString:
+            "✓ Корректная сортировка прозрачных блоков включена для 1.6.5. Быстрый QuadSort и VBO сохраняются.")
+        transparencyNotice.textColor = NSColor(calibratedRed: 0.72, green: 0.86,
+                                               blue: 0.45, alpha: 1)
+        transparencyNotice.font = .systemFont(ofSize: 12, weight: .medium)
+
+        let views: [NSView] = [memoryTitle, initialLabel, initialMemoryPopUp,
+                               maximumLabel, maximumMemoryPopUp, memoryHint,
+                               performanceTitle, fpsLabel, fpsPopUp, multicoreButton,
+                               graphicsDiagnosticsButton, chunkVboButton,
+                               transparencyNotice]
+        for view in views { view.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(view) }
+
+        NSLayoutConstraint.activate([
+            memoryTitle.topAnchor.constraint(equalTo: card.topAnchor, constant: 24),
+            memoryTitle.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 34),
+            initialLabel.topAnchor.constraint(equalTo: memoryTitle.bottomAnchor, constant: 18),
+            initialLabel.leadingAnchor.constraint(equalTo: memoryTitle.leadingAnchor),
+            initialMemoryPopUp.centerYAnchor.constraint(equalTo: initialLabel.centerYAnchor),
+            initialMemoryPopUp.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 200),
+            initialMemoryPopUp.widthAnchor.constraint(equalToConstant: 190),
+            maximumLabel.centerYAnchor.constraint(equalTo: initialLabel.centerYAnchor),
+            maximumLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 420),
+            maximumMemoryPopUp.centerYAnchor.constraint(equalTo: maximumLabel.centerYAnchor),
+            maximumMemoryPopUp.leadingAnchor.constraint(equalTo: maximumLabel.trailingAnchor, constant: 12),
+            maximumMemoryPopUp.widthAnchor.constraint(equalToConstant: 180),
+
+            memoryHint.topAnchor.constraint(equalTo: initialMemoryPopUp.bottomAnchor, constant: 10),
+            memoryHint.leadingAnchor.constraint(equalTo: memoryTitle.leadingAnchor),
+            memoryHint.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -34),
+
+            performanceTitle.topAnchor.constraint(equalTo: memoryHint.bottomAnchor, constant: 26),
+            performanceTitle.leadingAnchor.constraint(equalTo: memoryTitle.leadingAnchor),
+            fpsLabel.topAnchor.constraint(equalTo: performanceTitle.bottomAnchor, constant: 18),
+            fpsLabel.leadingAnchor.constraint(equalTo: performanceTitle.leadingAnchor),
+            fpsPopUp.centerYAnchor.constraint(equalTo: fpsLabel.centerYAnchor),
+            fpsPopUp.leadingAnchor.constraint(equalTo: initialMemoryPopUp.leadingAnchor),
+            fpsPopUp.widthAnchor.constraint(equalToConstant: 190),
+
+            multicoreButton.topAnchor.constraint(equalTo: fpsPopUp.bottomAnchor, constant: 18),
+            multicoreButton.leadingAnchor.constraint(equalTo: performanceTitle.leadingAnchor),
+            graphicsDiagnosticsButton.topAnchor.constraint(equalTo: multicoreButton.bottomAnchor, constant: 12),
+            graphicsDiagnosticsButton.leadingAnchor.constraint(equalTo: multicoreButton.leadingAnchor),
+            chunkVboButton.topAnchor.constraint(equalTo: graphicsDiagnosticsButton.bottomAnchor, constant: 12),
+            chunkVboButton.leadingAnchor.constraint(equalTo: multicoreButton.leadingAnchor),
+
+            transparencyNotice.leadingAnchor.constraint(equalTo: memoryTitle.leadingAnchor),
+            transparencyNotice.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -34),
+            transparencyNotice.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -24)
+        ])
+        return card
+    }
+
+    private func makeLogTab() -> NSView {
+        let card = makeCardView()
+        let title = sectionLabel("Журнал запуска и игры")
+        let clearButton = NSButton(title: "Очистить окно", target: self,
+                                   action: #selector(clearVisibleLog))
+        clearButton.bezelStyle = .rounded
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .noBorder
+        scrollView.wantsLayer = true
+        scrollView.layer?.cornerRadius = 8
+        logView = NSTextView(frame: NSRect(x: 0, y: 0, width: 700, height: 400))
+        logView.isEditable = false
+        logView.isSelectable = true
+        logView.isVerticallyResizable = true
+        logView.isHorizontallyResizable = false
+        logView.autoresizingMask = [.width]
+        logView.textContainer?.containerSize = NSSize(width: 700,
+                                                     height: CGFloat.greatestFiniteMagnitude)
+        logView.textContainer?.widthTracksTextView = true
+        logView.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        logView.backgroundColor = NSColor(calibratedWhite: 0.035, alpha: 0.90)
+        logView.textColor = NSColor(calibratedWhite: 0.9, alpha: 1)
+        scrollView.documentView = logView
+        for view in [title, clearButton, scrollView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            card.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: card.topAnchor, constant: 22),
+            title.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 28),
+            clearButton.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            clearButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -28),
+            scrollView.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: clearButton.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -24)
+        ])
+        return card
+    }
+
+    private func sectionLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 18, weight: .semibold)
+        label.textColor = .white
+        return label
+    }
+
+    private func valueLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.textColor = NSColor.white.withAlphaComponent(0.86)
+        return label
+    }
+
+    private func memoryPopUp(values: [Int]) -> NSPopUpButton {
+        let popUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        popUp.addItems(withTitles: values.map { memoryTitle($0) })
+        return popUp
+    }
+
+    private func memoryTitle(_ memory: Int) -> String {
+        memory < 1024 ? "\(memory) МБ" : "\(memory) МБ (\(memory / 1024) ГБ)"
+    }
+
+    private func refreshMemoryControls() {
+        let maximum = preferences.maximumMemoryMB
+        let initial = preferences.initialMemoryMB
+        maximumMemoryPopUp.selectItem(at:
+            MCGLLauncherPreferences.maximumMemoryMBValues.firstIndex(of: maximum) ?? 1)
+        for (index, value) in MCGLLauncherPreferences.initialMemoryMBValues.enumerated() {
+            initialMemoryPopUp.item(at: index)?.isEnabled = value <= maximum
+        }
+        initialMemoryPopUp.selectItem(at:
+            MCGLLauncherPreferences.initialMemoryMBValues.firstIndex(of: initial) ?? 0)
+    }
+
+    @objc private func initialMemoryChanged() {
+        let index = initialMemoryPopUp.indexOfSelectedItem
+        guard MCGLLauncherPreferences.initialMemoryMBValues.indices.contains(index) else { return }
+        preferences.initialMemoryMB = MCGLLauncherPreferences.initialMemoryMBValues[index]
+        refreshMemoryControls()
+    }
+
+    @objc private func maximumMemoryChanged() {
+        let index = maximumMemoryPopUp.indexOfSelectedItem
+        guard MCGLLauncherPreferences.maximumMemoryMBValues.indices.contains(index) else { return }
+        preferences.maximumMemoryMB = MCGLLauncherPreferences.maximumMemoryMBValues[index]
+        refreshMemoryControls()
     }
 
     @objc private func rememberLoginChanged() {
@@ -310,8 +526,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             ? MCGLLauncherPreferences.fpsLimits[index] : 0
     }
 
-    @objc private func chunkVboChanged() {
+    @objc private func performanceOptionsChanged() {
+        preferences.multicoreMemory = multicoreButton.state == .on
+        preferences.graphicsDiagnostics = graphicsDiagnosticsButton.state == .on
         preferences.chunkVbo = chunkVboButton.state == .on
+    }
+
+    @objc private func clearVisibleLog() {
+        logView.string = ""
+    }
+
+    @objc private func checkForLauncherUpdate() {
+        checkForLauncherUpdates(silent: false)
+    }
+
+    private func checkForLauncherUpdates(silent: Bool) {
+        updateButton.isEnabled = false
+        updateStatusLabel.stringValue = "GitHub: проверяем релизы…"
+        updater.check { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.updateButton.isEnabled = true
+                switch result {
+                case .success(.current):
+                    self.updateStatusLabel.stringValue = "Установлена актуальная версия"
+                    self.appendLog("Обновление лаунчера: установлена актуальная версия \(MCGLLauncherUpdater.currentVersion).")
+                    if !silent {
+                        let alert = NSAlert()
+                        alert.messageText = "Обновлений пока нет"
+                        alert.informativeText = "Установлена актуальная версия \(MCGLLauncherUpdater.currentVersion)."
+                        alert.addButton(withTitle: "Хорошо")
+                        alert.beginSheetModal(for: self.window)
+                    }
+                case .success(.available(let release)):
+                    self.updateStatusLabel.stringValue = "Доступна версия \(release.version)"
+                    self.updateButton.title = "Скачать \(release.version)"
+                    self.appendLog("Доступно обновление лаунчера: \(release.version).")
+                    self.offerLauncherUpdate(release)
+                case .failure(let error):
+                    self.updateStatusLabel.stringValue = "Не удалось проверить GitHub"
+                    self.appendLog("Проверка обновления лаунчера не удалась: \(error.localizedDescription)")
+                    if !silent { self.showUpdateError(error.localizedDescription) }
+                }
+            }
+        }
+    }
+
+    private func offerLauncherUpdate(_ release: MCGLGitHubRelease) {
+        let alert = NSAlert()
+        alert.messageText = "Доступна версия \(release.version)"
+        let notes = release.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.informativeText = notes.isEmpty
+            ? "Можно скачать новый DMG с официальной страницы порта на GitHub."
+            : String(notes.prefix(700))
+        alert.addButton(withTitle: release.diskImage == nil ? "Открыть GitHub" : "Скачать DMG")
+        alert.addButton(withTitle: "Позже")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            if release.diskImage == nil {
+                NSWorkspace.shared.open(release.pageURL)
+            } else {
+                self.downloadLauncherUpdate(release)
+            }
+        }
+    }
+
+    private func downloadLauncherUpdate(_ release: MCGLGitHubRelease) {
+        updateButton.isEnabled = false
+        updateStatusLabel.stringValue = "Загрузка версии \(release.version)…"
+        appendLog("Загрузка DMG версии \(release.version) с GitHub…")
+        updater.download(release) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.updateButton.isEnabled = true
+                switch result {
+                case .success(let diskImage):
+                    self.updateStatusLabel.stringValue = "DMG сохранён в «Загрузки»"
+                    self.appendLog("Обновление загружено и проверено: \(diskImage.path)")
+                    NSWorkspace.shared.open(diskImage)
+                    let alert = NSAlert()
+                    alert.messageText = "Обновление загружено"
+                    alert.informativeText = "Открылся новый DMG. Перетащи Minecraft Galaxy ARM64 в «Программы» с заменой, затем снова запусти приложение."
+                    alert.addButton(withTitle: "Понятно")
+                    alert.beginSheetModal(for: self.window)
+                case .failure(let error):
+                    self.updateStatusLabel.stringValue = "Ошибка загрузки"
+                    self.appendLog("Не удалось загрузить обновление: \(error.localizedDescription)")
+                    self.showUpdateError(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func showUpdateError(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Не удалось обновить лаунчер"
+        alert.informativeText = message
+        alert.addButton(withTitle: "Открыть GitHub")
+        alert.addButton(withTitle: "Закрыть")
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(MCGLLauncherUpdater.releasesPage)
+            }
+        }
     }
 
     @objc private func launchGame() {
@@ -414,19 +732,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = [login, passwordFIFO, logFIFO, gameDirectory]
-        let memoryIndex = max(memoryPopUp.indexOfSelectedItem, 0)
-        let memoryMB = supportedMemoryMB[memoryIndex]
-        let preallocateMemory = preallocateMemoryButton.state == .on
+        let initialMemoryMB = preferences.initialMemoryMB
+        let maximumMemoryMB = preferences.maximumMemoryMB
         let multicoreEnabled = multicoreButton.state == .on
         let graphicsDiagnosticsEnabled = graphicsDiagnosticsButton.state == .on
         let fpsLimit = preferences.fpsLimit
-        UserDefaults.standard.set(memoryMB, forKey: "MCGLMemoryLimitMB")
-        UserDefaults.standard.set(preallocateMemory, forKey: "MCGLPreallocateMemory")
-        UserDefaults.standard.set(multicoreEnabled, forKey: "MCGLMulticoreMemoryProfile")
-        UserDefaults.standard.set(graphicsDiagnosticsEnabled, forKey: "MCGLGraphicsDiagnostics")
+        preferences.multicoreMemory = multicoreEnabled
+        preferences.graphicsDiagnostics = graphicsDiagnosticsEnabled
+        preferences.chunkVbo = chunkVboButton.state == .on
         var runtimeEnvironment = ProcessInfo.processInfo.environment
-        runtimeEnvironment["MCGL_MEMORY_MB"] = String(memoryMB)
-        runtimeEnvironment["MCGL_PREALLOCATE_MEMORY"] = preallocateMemory ? "1" : "0"
+        runtimeEnvironment["MCGL_INITIAL_MEMORY_MB"] = String(initialMemoryMB)
+        runtimeEnvironment["MCGL_MEMORY_MB"] = String(maximumMemoryMB)
+        runtimeEnvironment.removeValue(forKey: "MCGL_PREALLOCATE_MEMORY")
         runtimeEnvironment["MCGL_MULTICORE_MEMORY"] = multicoreEnabled ? "1" : "0"
         runtimeEnvironment["MCGL_GRAPHICS_DIAGNOSTICS"] = graphicsDiagnosticsEnabled ? "1" : "0"
         runtimeEnvironment["MCGL_FPS_LIMIT"] = String(fpsLimit)
@@ -435,17 +752,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         configuration.activates = true
         configuration.createsNewApplicationInstance = true
         configuration.addsToRecentItems = false
-        memoryPopUp.isEnabled = false
-        preallocateMemoryButton.isEnabled = false
+        initialMemoryPopUp.isEnabled = false
+        maximumMemoryPopUp.isEnabled = false
         multicoreButton.isEnabled = false
         graphicsDiagnosticsButton.isEnabled = false
         chunkVboButton.isEnabled = false
         fpsPopUp.isEnabled = false
         appendLog(fpsLimit == 0 ? "Дополнительный лимит FPS выключен."
             : "Лимит FPS: \(fpsLimit). VSync и настройки игры могут ограничивать FPS сильнее.")
-        appendLog(preallocateMemory
-            ? "Память Java: \(memoryMB) МБ будут выделены при запуске."
-            : "Максимальная память Java: \(memoryMB) МБ; начальный резерв: 512 МБ.")
+        appendLog("Память Java: начальная \(initialMemoryMB) МБ; максимальная \(maximumMemoryMB) МБ.")
         appendLog(multicoreEnabled
             ? "Экспериментальный профиль памяти включён: G1GC использует фоновые ядра."
             : "Экспериментальный профиль памяти выключен: используется стандартный ParallelGC.")
@@ -607,8 +922,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         statusLabel.stringValue = status
         launchButton.isEnabled = true
         stopButton.isEnabled = false
-        memoryPopUp.isEnabled = true
-        preallocateMemoryButton.isEnabled = true
+        initialMemoryPopUp.isEnabled = true
+        maximumMemoryPopUp.isEnabled = true
         multicoreButton.isEnabled = true
         graphicsDiagnosticsButton.isEnabled = true
         chunkVboButton.isEnabled = true

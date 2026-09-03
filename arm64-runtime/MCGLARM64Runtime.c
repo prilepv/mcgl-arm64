@@ -59,6 +59,47 @@ static int mcgl_memory_limit_mb(void) {
     return default_memory_mb;
 }
 
+static int mcgl_initial_memory_mb(int maximum_memory_mb) {
+    const int default_memory_mb = 512;
+    const int supported_memory_mb[] = {512, 1024, 2048, 4096, 6144, 8192};
+    const char *value = getenv("MCGL_INITIAL_MEMORY_MB");
+    if (value == NULL || value[0] == '\0') {
+        // Compatibility with launchers up to 1.6.4.
+        const char *preallocate_memory = getenv("MCGL_PREALLOCATE_MEMORY");
+        return preallocate_memory != NULL && strcmp(preallocate_memory, "1") == 0
+            ? maximum_memory_mb : default_memory_mb;
+    }
+
+    char *end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0') {
+        fprintf(stderr,
+                "Runtime: invalid MCGL_INITIAL_MEMORY_MB '%s'; using %d MB.\n",
+                value, default_memory_mb);
+        return default_memory_mb;
+    }
+
+    for (size_t index = 0;
+         index < sizeof(supported_memory_mb) / sizeof(supported_memory_mb[0]);
+         index++) {
+        if (parsed == supported_memory_mb[index]) {
+            if (parsed > maximum_memory_mb) {
+                fprintf(stderr,
+                        "Runtime: initial heap %ld MB exceeds maximum %d MB; clamping it.\n",
+                        parsed, maximum_memory_mb);
+                return maximum_memory_mb;
+            }
+            return (int)parsed;
+        }
+    }
+
+    fprintf(stderr,
+            "Runtime: unsupported initial memory %ld MB; using %d MB.\n",
+            parsed, default_memory_mb);
+    return default_memory_mb;
+}
+
 typedef struct {
     JavaVM *vm;
     jclass launcher_class;
@@ -252,9 +293,7 @@ int main(int argc, char **argv) {
     char initial_heap_option[64];
     char maximum_heap_option[64];
     int memory_limit_mb = mcgl_memory_limit_mb();
-    const char *preallocate_memory = getenv("MCGL_PREALLOCATE_MEMORY");
-    int initial_memory_mb = preallocate_memory != NULL &&
-        strcmp(preallocate_memory, "1") == 0 ? memory_limit_mb : 512;
+    int initial_memory_mb = mcgl_initial_memory_mb(memory_limit_mb);
     snprintf(initial_heap_option, sizeof(initial_heap_option),
              "-Xms%dM", initial_memory_mb);
     snprintf(maximum_heap_option, sizeof(maximum_heap_option),

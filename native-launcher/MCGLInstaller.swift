@@ -17,7 +17,7 @@ final class MCGLInstaller {
     private let jarExecutableURL: URL
     private let resolverLock = NSLock()
     private var resolvedAddressCache: [String: [String]] = [:]
-    private let portMarker = "Minecraft Galaxy ARM64 bootstrap 1.6.4\n"
+    private let portMarker = "Minecraft Galaxy ARM64 bootstrap 1.6.5\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,
         URL(string: "http://f3.mcgl.ru/mclient/")!,
@@ -178,6 +178,11 @@ final class MCGLInstaller {
         if profileExists {
             progress("Установка проверенных обновлений MCGL…")
             try applyStagedFiles(from: temporaryURL, to: gameDirectoryURL)
+            if needsPortRefresh {
+                if try enableTransparentSortingIfPresent() {
+                    progress("Сортировка прозрачных блоков включена для корректной графики.")
+                }
+            }
             for path in removedPaths.sorted() {
                 try validate(relativePath: path)
                 let obsolete = gameDirectoryURL.appendingPathComponent(path)
@@ -192,6 +197,31 @@ final class MCGLInstaller {
             try fileManager.moveItem(at: temporaryURL, to: gameDirectoryURL)
             progress("Официальный клиент загружен; ARM64-порт установлен.")
         }
+    }
+
+    static func enablingAlphaSort(in text: String) -> (text: String, changed: Bool) {
+        var lines = text.components(separatedBy: "\n")
+        var changed = false
+        for index in lines.indices where !changed {
+            if lines[index] == "alphaSort:false" {
+                lines[index] = "alphaSort:true"
+                changed = true
+            } else if lines[index] == "alphaSort:false\r" {
+                lines[index] = "alphaSort:true\r"
+                changed = true
+            }
+        }
+        return (lines.joined(separator: "\n"), changed)
+    }
+
+    private func enableTransparentSortingIfPresent() throws -> Bool {
+        let optionsURL = gameDirectoryURL.appendingPathComponent("options.txt")
+        guard fileManager.fileExists(atPath: optionsURL.path) else { return false }
+        let text = try String(contentsOf: optionsURL, encoding: .utf8)
+        let result = Self.enablingAlphaSort(in: text)
+        guard result.changed else { return false }
+        try Data(result.text.utf8).write(to: optionsURL, options: .atomic)
+        return true
     }
 
     private func portSupportPaths() throws -> Set<String> {

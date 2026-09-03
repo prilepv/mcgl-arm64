@@ -360,6 +360,7 @@ public final class PatchMCGLPerformance implements Opcodes {
             for (MethodNode m : c.methods) require(!(m.name.equals("o00000") && m.desc.equals("(L" + ENGINE + ";)V")), "custom texture binder " + c.name);
         PatchMCGLLightmap.patch(classes, changed);
         PatchMCGLChunkVbo.patch(classes, changed);
+        PatchMCGLTransparency.patch(classes, changed);
         for (Map.Entry<String, ClassNode> e : classes.entrySet()) {
             ClassNode c = e.getValue();
             // The official client uses Java 6 classes; retain verifier frames by
@@ -384,7 +385,7 @@ public final class PatchMCGLPerformance implements Opcodes {
                 out.putNextEntry(new JarEntry(e.getKey())); out.write(e.getValue()); out.closeEntry();
             }
         }
-        System.out.println("MCGL patches: ordered particles, animation cache, isolated lightmap uploads, stable quad sorting, phase diagnostics, safe focus/resize, optional terrain VBO/VAO with native fallback.");
+        System.out.println("MCGL patches: ordered particles, animation cache, isolated lightmap uploads, stable transparent-quad sorting, phase diagnostics, safe focus/resize, optional terrain VBO/VAO with native fallback.");
     }
     private static byte[] read(InputStream in) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] b = new byte[16384]; int n;
