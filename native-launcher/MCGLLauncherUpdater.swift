@@ -39,7 +39,7 @@ struct MCGLGitHubRelease: Decodable {
 }
 
 final class MCGLLauncherUpdater {
-    static let currentVersion = "1.6.6"
+    static let currentVersion = "1.6.7"
     static let releasesPage = URL(string: "https://github.com/prilepv/mcgl-arm64/releases")!
     private static let latestReleaseAPI = URL(
         string: "https://api.github.com/repos/prilepv/mcgl-arm64/releases/latest")!

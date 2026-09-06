@@ -27,16 +27,36 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework Cocoa -framework CryptoKit \
     "$source_root/native-launcher/MCGLNativeLauncher.swift" \
     "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
+    "$source_root/native-launcher/MCGLAccounts.swift" \
+    "$source_root/native-launcher/MCGLPasswordStore.swift" \
+    "$source_root/native-launcher/MCGLAccountCard.swift" \
+    "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" -o "$result_dir/launcher"
 swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework Cocoa -framework CryptoKit \
     "$source_root/native-launcher/MCGLNativeLauncher.swift" \
     "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
+    "$source_root/native-launcher/MCGLAccounts.swift" \
+    "$source_root/native-launcher/MCGLPasswordStore.swift" \
+    "$source_root/native-launcher/MCGLAccountCard.swift" \
+    "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/tests/LauncherUITest.swift" -o "$result_dir/ui-test"
 "$result_dir/ui-test" "$source_root/native-launcher/Assets"
+swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework Cocoa -framework CryptoKit \
+    "$source_root/native-launcher/MCGLNativeLauncher.swift" \
+    "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
+    "$source_root/native-launcher/MCGLAccounts.swift" \
+    "$source_root/native-launcher/MCGLPasswordStore.swift" \
+    "$source_root/native-launcher/MCGLAccountCard.swift" \
+    "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
+    "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
+    "$source_root/tests/AccountsLayoutTest.swift" -o "$result_dir/accounts-layout-test"
+"$result_dir/accounts-layout-test" "$source_root/native-launcher/Assets"
 swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework Cocoa \
     "$source_root/tests/ImageAssetTest.swift" -o "$result_dir/image-test"
@@ -63,6 +83,11 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/tests/LauncherUpgradeTest.swift" -o "$result_dir/upgrade-test"
 "$result_dir/upgrade-test"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework CryptoKit \
+    "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
+    "$source_root/tests/LauncherAccountsUpgradeTest.swift" -o "$result_dir/accounts-upgrade-test"
+"$result_dir/accounts-upgrade-test"
 swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" \
     "$source_root/tools/BuildICNS.swift" -o "$result_dir/build-icns"
@@ -71,6 +96,19 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
     "$source_root/tests/LauncherPreferencesTest.swift" -o "$result_dir/preferences-test"
 "$result_dir/preferences-test"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" \
+    "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
+    "$source_root/native-launcher/MCGLAccounts.swift" \
+    "$source_root/tests/AccountsTest.swift" -o "$result_dir/accounts-test"
+"$result_dir/accounts-test"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework CryptoKit \
+    "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
+    "$source_root/native-launcher/MCGLAccounts.swift" \
+    "$source_root/native-launcher/MCGLPasswordStore.swift" \
+    "$source_root/tests/PasswordStoreTest.swift" -o "$result_dir/password-store-test"
+"$result_dir/password-store-test"
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework CryptoKit \
     "$source_root/native-launcher/MCGLInstaller.swift" \

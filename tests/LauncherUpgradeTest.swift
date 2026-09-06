@@ -56,8 +56,8 @@ struct LauncherUpgradeTest {
                     done.signal()
                 }
             case .success(.current):
-                succeeded = !live && MCGLLauncherUpdater.currentVersion == "1.6.6"
-                if succeeded { print("UPGRADE_CURRENT_PASS 1.6.6 does not offer itself again") }
+                succeeded = !live && !MCGLLauncherUpdater.isNewer("1.6.6", than: MCGLLauncherUpdater.currentVersion)
+                if succeeded { print("UPGRADE_CURRENT_PASS current version does not offer 1.6.6 again") }
                 done.signal()
             case .failure(let error):
                 print("UPGRADE_CHECK_FAIL \(error.localizedDescription)")

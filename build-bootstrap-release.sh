@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 workspace_dir=${script_dir:h:h}
-version=1.6.6
+version=1.6.7
 dependency_root=${MCGL_BUILD_INPUTS:-$script_dir}
 output_root=${MCGL_RELEASE_OUTPUT_ROOT:-$workspace_dir/dist}
 release_name="Minecraft-Galaxy-ARM64-Bootstrap-${version}"
@@ -42,6 +42,10 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -framework Cocoa -framework CryptoKit \
     "$script_dir/native-launcher/MCGLNativeLauncher.swift" \
     "$script_dir/native-launcher/MCGLLauncherPreferences.swift" \
+    "$script_dir/native-launcher/MCGLAccounts.swift" \
+    "$script_dir/native-launcher/MCGLPasswordStore.swift" \
+    "$script_dir/native-launcher/MCGLAccountCard.swift" \
+    "$script_dir/native-launcher/MCGLAccountsDocumentView.swift" \
     "$script_dir/native-launcher/MCGLInstaller.swift" \
     "$script_dir/native-launcher/MCGLLauncherUpdater.swift" \
     -o "$contents_dir/MacOS/MCGL ARM64 Launcher"
@@ -72,6 +76,7 @@ ditto "$icon_work/app.icns" "$runtime_app/Contents/Resources/app.icns"
 ditto "$icon_work/app.icns" "$resources_dir/app.icns"
 ditto "$icon_symbol" "$resources_dir/app-icon-symbol.png"
 ditto "$background_source" "$resources_dir/launcher-background.png"
+ditto "$script_dir/native-launcher/Assets/Professions" "$resources_dir/Professions"
 
 xcrun clang -x objective-c -arch arm64 -mmacosx-version-min=14.0 \
     -I"$java_source/include" -I"$java_source/include/darwin" \

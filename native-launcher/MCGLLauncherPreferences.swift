@@ -13,6 +13,17 @@ final class MCGLLauncherPreferences {
 
     var remembersLogin: Bool { defaults.bool(forKey: "MCGLRememberLogin") }
 
+    var localPasswordNoticeAccepted: Bool {
+        get { defaults.bool(forKey: "MCGLLocalPasswordNoticeAccepted") }
+        set { defaults.set(newValue, forKey: "MCGLLocalPasswordNoticeAccepted") }
+    }
+
+    /// Versioned account metadata and public statistics only; never credentials.
+    var accountData: Data? {
+        get { defaults.data(forKey: "MCGLAccountsV1") }
+        set { defaults.set(newValue, forKey: "MCGLAccountsV1") }
+    }
+
     var chunkVbo: Bool {
         get { (defaults.object(forKey: "MCGLChunkVBO") as? Bool) ?? true }
         set { defaults.set(newValue, forKey: "MCGLChunkVBO") }

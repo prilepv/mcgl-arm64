@@ -1,7 +1,7 @@
 import Cocoa
 import Darwin
 
-private enum GalaxyTheme {
+enum GalaxyTheme {
     static let ink = NSColor(srgbRed: 0.025, green: 0.024, blue: 0.055, alpha: 1)
     static let panel = NSColor(srgbRed: 0.045, green: 0.041, blue: 0.085, alpha: 0.96)
     static let blue = NSColor(srgbRed: 0.32, green: 0.27, blue: 0.76, alpha: 1)
@@ -44,6 +44,16 @@ final class GalaxyButton: NSButton {
     var selected = false { didSet { needsDisplay = true } }
     override var isEnabled: Bool { didSet { needsDisplay = true } }
 
+    func contentLayout(textSize: NSSize) -> (icon: NSRect, text: NSPoint) {
+        let iconWidth: CGFloat = symbol == nil ? 0 : 18
+        // Icon-only actions have no label gap; otherwise they sit 4 pt off centre.
+        let gap: CGFloat = symbol != nil && !title.isEmpty ? 8 : 0
+        let contentWidth = iconWidth + gap + textSize.width
+        let x = style == .navigation ? bounds.minX + 16 : bounds.midX - contentWidth / 2
+        return (NSRect(x: x, y: bounds.midY - 9, width: iconWidth, height: 18),
+                NSPoint(x: x + iconWidth + gap, y: bounds.midY - textSize.height / 2))
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
                                  xRadius: 10, yRadius: 10)
@@ -68,9 +78,7 @@ final class GalaxyButton: NSButton {
                                      weight: .semibold), .foregroundColor: color
         ]
         let text = NSAttributedString(string: title, attributes: attrs)
-        let width = text.size().width
-        let iconSpace: CGFloat = symbol == nil ? 0 : 26
-        let x: CGFloat = style == .navigation ? 16 : (bounds.width - width - iconSpace) / 2
+        let layout = contentLayout(textSize: text.size())
         if let symbol, let icon = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
             let tinted = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
                 icon.draw(in: rect)
@@ -78,9 +86,9 @@ final class GalaxyButton: NSButton {
                 rect.fill(using: .sourceIn)
                 return true
             }
-            tinted.draw(in: NSRect(x: x, y: (bounds.height - 18) / 2, width: 18, height: 18))
+            tinted.draw(in: layout.icon)
         }
-        text.draw(at: NSPoint(x: x + iconSpace, y: (bounds.height - text.size().height) / 2))
+        if !title.isEmpty { text.draw(at: layout.text) }
         if window?.firstResponder === self {
             GalaxyTheme.cyan.setStroke()
             shape.lineWidth = 2
@@ -138,11 +146,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private let preferences: MCGLLauncherPreferences
     private let resourcesOverride: URL?
     private let updater = MCGLLauncherUpdater()
+    private let accounts: MCGLAccountStore
+    private let accountService: MCGLAccountFetching
+    private let passwordStore: MCGLPasswordStore
 
     init(preferences: MCGLLauncherPreferences = MCGLLauncherPreferences(),
-         resourcesRoot: URL? = nil) {
+         resourcesRoot: URL? = nil,
+         accountService: MCGLAccountFetching = MCGLAccountService(),
+         passwordStore: MCGLPasswordStore = MCGLPasswordStore()) {
         self.preferences = preferences
         self.resourcesOverride = resourcesRoot
+        self.accounts = MCGLAccountStore(preferences: preferences)
+        self.accountService = accountService
+        self.passwordStore = passwordStore
         super.init()
     }
     private lazy var resourcesRoot: URL = {
@@ -189,7 +205,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private var navigationButtons: [GalaxyButton] = []
     private var loginField: NSTextField!
     private var passwordField: NSSecureTextField!
-    private var rememberLoginButton: NSButton!
+    private var rememberPasswordButton: NSButton!
+    private var accountList: NSStackView!
+    private var accountSummary: MCGLAccountCard!
+    private var accountCards: [UUID: MCGLAccountCard] = [:]
+    private var accountEditingButtons: [NSButton] = []
+    private var accountStatus: [UUID: String] = [:]
+    private var accountRequests: [UUID: MCGLAccountRequest] = [:]
+    private var accountRequestTokens: [UUID: UUID] = [:]
+    private var accountQueue: [UUID] = []
+    private var accountAttempts: [UUID: Date] = [:]
+    private var accountCountLabel: NSTextField!
     private var fpsPopUp: NSPopUpButton!
     private var launchButton: GalaxyButton!
     private var launchState: MCGLLaunchState = .ready {
@@ -216,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         checkForLauncherUpdates(silent: true)
+        if let selected = accounts.selected { queueAccountRefresh(selected.id) }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -227,6 +254,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             gameApplication.terminate()
         }
         cleanupTransport()
+        accountQueue.removeAll()
+        accountRequestTokens.removeAll()
+        accountRequests.values.forEach { $0.cancel() }
+        accountRequests.removeAll()
     }
 
     func buildWindow() {
@@ -265,8 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             attributes: [.kern: 2, .font: brandDetail.font!, .foregroundColor: GalaxyTheme.muted])
         let navigationTitle = label("ЛАУНЧЕР", size: 10, weight: .semibold, color: GalaxyTheme.muted)
 
-        let titles = ["Играть", "Настройки", "Журнал"]
-        let symbols = ["play.fill", "slider.horizontal.3", "text.alignleft"]
+        let titles = ["Играть", "Аккаунты", "Настройки", "Журнал"]
+        let symbols = ["play.fill", "person.2.fill", "slider.horizontal.3", "text.alignleft"]
         for index in 0..<titles.count {
             let button = actionButton(titles[index], symbol: symbols[index],
                                       action: #selector(selectPage(_:)), style: .navigation)
@@ -291,8 +322,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         tabView = NSTabView()
         tabView.tabViewType = .noTabsNoBorder
         tabView.drawsBackground = false
-        for (index, view) in [makePlayTab(), makeSettingsTab(), makeLogTab()].enumerated() {
-            let item = NSTabViewItem(identifier: ["play", "settings", "log"][index])
+        for (index, view) in [makePlayTab(), makeAccountsTab(), makeSettingsTab(), makeLogTab()].enumerated() {
+            let item = NSTabViewItem(identifier: ["play", "accounts", "settings", "log"][index])
             item.label = titles[index]
             item.view = view
             tabView.addTabViewItem(item)
@@ -365,7 +396,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             button.heightAnchor.constraint(equalToConstant: 46).isActive = true
         }
         refreshMemoryControls()
+        rebuildAccounts()
         showPage(0)
+        restoreSelectedPassword()
         window.initialFirstResponder = loginField.stringValue.isEmpty ? loginField : passwordField
     }
 
@@ -379,6 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             button.setAccessibilityValue(button.selected ? "Выбрано" : "")
         }
         refreshLaunchButton()
+        if index == 1 { accounts.accounts.forEach { queueAccountRefresh($0.id) } }
     }
 
     private func refreshLaunchButton() {
@@ -393,6 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         launchButton.keyEquivalent = acceptsReturn ? "\r" : ""
         window.defaultButtonCell = acceptsReturn ? launchButton.cell as? NSButtonCell : nil
         launchButton.needsDisplay = true
+        refreshAccountControls()
     }
 
 #if MCGL_LAUNCHER_TEST
@@ -430,7 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         loginField = NSTextField()
         loginField.placeholderString = "Логин MCGL"
         loginField.identifier = NSUserInterfaceItemIdentifier("login")
-        loginField.stringValue = preferences.savedLogin
+        loginField.stringValue = accounts.selected?.nickname ?? ""
         loginField.delegate = self
         styleField(loginField)
         loginField.setAccessibilityLabel("Логин MCGL")
@@ -441,23 +476,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         passwordField.target = self
         passwordField.action = #selector(launchGame)
         passwordField.identifier = NSUserInterfaceItemIdentifier("password")
+        passwordField.delegate = self
         styleField(passwordField)
         passwordField.setAccessibilityLabel("Пароль MCGL")
-        rememberLoginButton = NSButton(checkboxWithTitle: "Сохранять логин",
-                                       target: self, action: #selector(rememberLoginChanged))
-        rememberLoginButton.identifier = NSUserInterfaceItemIdentifier("rememberLogin")
-        rememberLoginButton.state = preferences.remembersLogin ? .on : .off
-        styleCheckbox(rememberLoginButton)
-        rememberLoginButton.toolTip = "Сохраняется только логин на этом Mac. Пароль не сохраняется."
+        rememberPasswordButton = NSButton(checkboxWithTitle: "Сохранить пароль на этом Mac",
+                                         target: self, action: #selector(rememberPasswordChanged))
+        rememberPasswordButton.identifier = NSUserInterfaceItemIdentifier("remember-password")
+        styleCheckbox(rememberPasswordButton)
+        accountSummary = MCGLAccountCard(resources: resourcesRoot, compact: true)
+        accountSummary.identifier = NSUserInterfaceItemIdentifier("account-summary")
 
         launchButton = actionButton("Запустить игру", symbol: "play.fill",
                                      action: #selector(toggleGame), style: .primary)
         launchButton.identifier = NSUserInterfaceItemIdentifier("launch")
         let hint = label("Оставь лаунчер открытым, пока работает игра.",
                          size: 10, color: GalaxyTheme.muted)
-        add([edition, hero, description, card], to: page)
+        add([edition, hero, description, card, accountSummary], to: page)
         add([welcome, loginLabel, loginField, passwordLabel, passwordField,
-             rememberLoginButton, launchButton, hint], to: card)
+             rememberPasswordButton, launchButton, hint], to: card)
         NSLayoutConstraint.activate([
             edition.topAnchor.constraint(equalTo: page.topAnchor, constant: 4),
             edition.leadingAnchor.constraint(equalTo: page.leadingAnchor),
@@ -466,9 +502,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             description.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             description.topAnchor.constraint(equalTo: hero.bottomAnchor, constant: 10),
             card.leadingAnchor.constraint(equalTo: page.leadingAnchor),
-            card.topAnchor.constraint(equalTo: page.topAnchor, constant: 198),
+            card.topAnchor.constraint(equalTo: page.topAnchor, constant: 176),
             card.widthAnchor.constraint(equalToConstant: 398),
-            card.bottomAnchor.constraint(equalTo: page.bottomAnchor),
+            card.bottomAnchor.constraint(equalTo: hint.bottomAnchor, constant: 24),
+            card.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor),
             welcome.topAnchor.constraint(equalTo: card.topAnchor, constant: 21),
             welcome.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 24),
             loginLabel.topAnchor.constraint(equalTo: welcome.bottomAnchor, constant: 16),
@@ -483,17 +520,363 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             passwordField.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
             passwordField.trailingAnchor.constraint(equalTo: loginField.trailingAnchor),
             passwordField.heightAnchor.constraint(equalToConstant: 32),
-            rememberLoginButton.topAnchor.constraint(equalTo: passwordField.bottomAnchor, constant: 10),
-            rememberLoginButton.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            launchButton.topAnchor.constraint(equalTo: rememberLoginButton.bottomAnchor, constant: 16),
+            rememberPasswordButton.topAnchor.constraint(equalTo: passwordField.bottomAnchor, constant: 10),
+            rememberPasswordButton.leadingAnchor.constraint(equalTo: passwordField.leadingAnchor),
+            rememberPasswordButton.trailingAnchor.constraint(lessThanOrEqualTo: passwordField.trailingAnchor),
+            rememberPasswordButton.heightAnchor.constraint(equalToConstant: 22),
+            launchButton.topAnchor.constraint(equalTo: rememberPasswordButton.bottomAnchor, constant: 14),
             launchButton.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
             launchButton.trailingAnchor.constraint(equalTo: loginField.trailingAnchor),
             launchButton.heightAnchor.constraint(equalToConstant: 42),
             hint.topAnchor.constraint(equalTo: launchButton.bottomAnchor, constant: 10),
             hint.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            hint.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -16)
+            hint.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -16),
+            accountSummary.leadingAnchor.constraint(equalTo: card.trailingAnchor, constant: 16),
+            accountSummary.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            accountSummary.topAnchor.constraint(equalTo: card.topAnchor),
+            accountSummary.heightAnchor.constraint(equalToConstant: 158)
         ])
         return page
+    }
+
+    private func makeAccountsTab() -> NSView {
+        let page = NSView()
+        let heading = label("Твои аккаунты", size: 28, weight: .bold)
+        let caption = note("Основной персонаж и твинки — всё под рукой.")
+        let addButton = actionButton("Добавить", symbol: "plus", action: #selector(addAccount), style: .primary)
+        addButton.identifier = NSUserInterfaceItemIdentifier("account-add")
+        accountEditingButtons = [addButton]
+        let refresh = actionButton("Обновить уровни", symbol: "arrow.clockwise", action: #selector(refreshAccounts))
+        refresh.identifier = NSUserInterfaceItemIdentifier("account-refresh")
+        accountCountLabel = label("", size: 11, color: GalaxyTheme.muted)
+        let scroll = NSScrollView()
+        scroll.identifier = NSUserInterfaceItemIdentifier("account-scroll")
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.contentView = VerticalLogClipView()
+        scroll.contentView.drawsBackground = false
+        accountList = verticalStack([], spacing: 12)
+        accountList.identifier = NSUserInterfaceItemIdentifier("account-list")
+        let document = MCGLAccountsDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = document
+        add([accountList], to: document)
+        let footer = note("Уровни и профессия загружаются с форума MCGL по нику. Сохранение пароля — по желанию, на этом Mac.")
+        add([heading, caption, addButton, refresh, accountCountLabel, scroll, footer], to: page)
+        NSLayoutConstraint.activate([
+            heading.topAnchor.constraint(equalTo: page.topAnchor, constant: 4),
+            heading.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            caption.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 6),
+            caption.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            addButton.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            addButton.topAnchor.constraint(equalTo: heading.topAnchor),
+            addButton.widthAnchor.constraint(equalToConstant: 130), addButton.heightAnchor.constraint(equalToConstant: 38),
+            refresh.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 16),
+            refresh.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            refresh.widthAnchor.constraint(equalToConstant: 175), refresh.heightAnchor.constraint(equalToConstant: 32),
+            accountCountLabel.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            accountCountLabel.centerYAnchor.constraint(equalTo: refresh.centerYAnchor),
+            scroll.topAnchor.constraint(equalTo: refresh.bottomAnchor, constant: 12),
+            scroll.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -14),
+            footer.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -3),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            accountList.topAnchor.constraint(equalTo: document.topAnchor, constant: 2),
+            accountList.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            accountList.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -12),
+            accountList.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -2)
+        ])
+        return page
+    }
+
+    private func rebuildAccounts() {
+        guard let accountList else { return }
+        accountList.arrangedSubviews.forEach { accountList.removeArrangedSubview($0); $0.removeFromSuperview() }
+        accountCards.removeAll()
+        accountEditingButtons = accountEditingButtons.filter { $0.identifier?.rawValue == "account-add" }
+        if accounts.accounts.isEmpty {
+            let empty = makeCardView()
+            let title = label(accounts.loadError == nil ? "Первый аккаунт на орбите" : "Список недоступен",
+                              size: 21, weight: .semibold)
+            let text = note(accounts.loadError?.localizedDescription
+                ?? "Нажми «Добавить» и укажи игровой ник.\nЗдесь появятся профессия и уровни персонажа.")
+            add([title, text], to: empty)
+            NSLayoutConstraint.activate([
+                title.leadingAnchor.constraint(equalTo: empty.leadingAnchor, constant: 24),
+                title.topAnchor.constraint(equalTo: empty.topAnchor, constant: 27),
+                text.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+                text.trailingAnchor.constraint(equalTo: empty.trailingAnchor, constant: -24),
+                text.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 12),
+                empty.heightAnchor.constraint(equalToConstant: 156)
+            ])
+            accountList.addArrangedSubview(empty)
+            empty.widthAnchor.constraint(equalTo: accountList.widthAnchor).isActive = true
+        }
+        for (index, account) in accounts.accounts.enumerated() {
+            let card = MCGLAccountCard(resources: resourcesRoot)
+            card.identifier = NSUserInterfaceItemIdentifier("account-card-\(account.id)")
+            accountCards[account.id] = card
+            let choose = actionButton(accounts.selected?.id == account.id ? "Выбран" : "Выбрать",
+                                      symbol: accounts.selected?.id == account.id ? "checkmark" : "person", action: #selector(selectAccount(_:)))
+            let rename = actionButton("", symbol: "pencil", action: #selector(renameAccount(_:)))
+            rename.setAccessibilityLabel("Переименовать \(account.nickname)")
+            rename.toolTip = "Изменить название карточки"
+            let remove = actionButton("", symbol: "trash", action: #selector(removeAccount(_:)))
+            remove.setAccessibilityLabel("Удалить \(account.nickname) из списка")
+            remove.toolTip = "Удалить из списка лаунчера"
+            for (role, button) in [("select", choose), ("rename", rename), ("remove", remove)] {
+                button.tag = index
+                button.identifier = NSUserInterfaceItemIdentifier("account-\(role)-\(index)")
+                accountEditingButtons.append(button)
+            }
+            add([choose, rename, remove], to: card)
+            NSLayoutConstraint.activate([
+                remove.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+                remove.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -16),
+                remove.widthAnchor.constraint(equalToConstant: 32), remove.heightAnchor.constraint(equalToConstant: 29),
+                rename.trailingAnchor.constraint(equalTo: remove.leadingAnchor, constant: -6),
+                rename.centerYAnchor.constraint(equalTo: remove.centerYAnchor),
+                rename.widthAnchor.constraint(equalTo: remove.widthAnchor), rename.heightAnchor.constraint(equalTo: remove.heightAnchor),
+                choose.trailingAnchor.constraint(equalTo: rename.leadingAnchor, constant: -8),
+                choose.centerYAnchor.constraint(equalTo: remove.centerYAnchor),
+                choose.widthAnchor.constraint(equalToConstant: 105), choose.heightAnchor.constraint(equalTo: remove.heightAnchor)
+            ])
+            card.reserveFooterSpace(before: choose)
+            accountList.addArrangedSubview(card)
+            card.widthAnchor.constraint(equalTo: accountList.widthAnchor).isActive = true
+        }
+        refreshAccountCards()
+        refreshAccountControls()
+    }
+
+    private func refreshAccountCards() {
+        for account in accounts.accounts {
+            accountCards[account.id]?.update(account: account, selected: accounts.selected?.id == account.id,
+                                            status: accountStatusText(account))
+        }
+        let selected = accounts.selected
+        accountSummary?.update(account: selected, selected: selected != nil,
+                               status: selected.map(accountStatusText) ?? "Быстрый выбор из сохранённых логинов")
+        accountSummary?.isHidden = selected == nil
+        accountCountLabel?.stringValue = "Сохранено: \(accounts.accounts.count) / 30"
+    }
+
+    private func accountStatusText(_ account: MCGLAccount) -> String {
+        let stamp = account.info.map { DateFormatter.localizedString(from: $0.fetchedAt, dateStyle: .short, timeStyle: .short) }
+        if let status = accountStatus[account.id] {
+            return status + (stamp.map { " · данные от \($0)" } ?? "")
+        }
+        return stamp.map { "Данные от \($0)" } ?? "Уровни ещё не загружены"
+    }
+
+    private func refreshAccountControls() {
+        let editable = launchState == .ready
+        loginField?.isEnabled = editable
+        passwordField?.isEnabled = editable
+        rememberPasswordButton?.isEnabled = editable && accounts.selected != nil && accounts.loadError == nil
+        rememberPasswordButton?.toolTip = accounts.selected == nil
+            ? "Для сохранения пароля добавь и выбери логин во вкладке «Аккаунты»."
+            : "Без Связки ключей и мастер-пароля. Программа с доступом к твоим файлам сможет восстановить пароль."
+        accountEditingButtons.forEach { $0.isEnabled = editable && accounts.loadError == nil }
+    }
+
+    private func applyAccountSelection() {
+        passwordField.stringValue = ""
+        loginField.stringValue = accounts.selected?.nickname ?? ""
+        rebuildAccounts()
+        restoreSelectedPassword()
+        if let selected = accounts.selected { queueAccountRefresh(selected.id) }
+    }
+
+    @objc private func selectAccount(_ sender: NSButton) {
+        guard launchState == .ready, accounts.accounts.indices.contains(sender.tag) else { return }
+        do {
+            try persistSelectedPassword()
+            try accounts.select(accounts.accounts[sender.tag].id)
+            applyAccountSelection()
+        }
+        catch { showError(error.localizedDescription) }
+    }
+
+    private func restoreSelectedPassword() {
+        passwordField.stringValue = ""
+        rememberPasswordButton.state = .off
+        guard let account = accounts.selected else { return }
+        do {
+            if let password = try passwordStore.password(for: account) {
+                passwordField.stringValue = password
+                rememberPasswordButton.state = .on
+            }
+        } catch {
+            // Allow explicitly forgetting an unreadable record, but never silently reset it.
+            rememberPasswordButton.state = .on
+            statusLabel.stringValue = "Сохранённый пароль недоступен. Можно убрать галочку и ввести его заново."
+        }
+    }
+
+    private func persistSelectedPassword() throws {
+        guard rememberPasswordButton.state == .on, preferences.localPasswordNoticeAccepted,
+              let account = accounts.selected,
+              account.nickname.caseInsensitiveCompare(loginField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame,
+              !passwordField.stringValue.isEmpty else { return }
+        try passwordStore.save(passwordField.stringValue, for: account)
+    }
+
+    @objc private func rememberPasswordChanged() {
+        guard launchState == .ready, let account = accounts.selected else { return }
+        if rememberPasswordButton.state == .off {
+            do { try passwordStore.remove(for: account) }
+            catch { rememberPasswordButton.state = .on; showError(error.localizedDescription) }
+            return
+        }
+        if preferences.localPasswordNoticeAccepted {
+            do { try persistSelectedPassword() }
+            catch { showError(error.localizedDescription) }
+            return
+        }
+        let alert = NSAlert()
+        alert.window.appearance = NSAppearance(named: .darkAqua)
+        alert.messageText = "Сохранить пароль на этом Mac?"
+        alert.informativeText = "Лаунчер сохранит пароль локально, без Связки ключей и мастер-пароля. "
+            + "Файл будет зашифрован, но ключ хранится рядом: программа с доступом к твоим файлам сможет восстановить пароль. "
+            + "Снятие галочки удаляет сохранённый пароль этого аккаунта."
+        alert.addButton(withTitle: "Сохранить")
+        alert.addButton(withTitle: "Отмена")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, self.accounts.selected?.id == account.id, self.launchState == .ready else { return }
+            guard response == .alertFirstButtonReturn else {
+                self.rememberPasswordButton.state = .off
+                return
+            }
+            self.preferences.localPasswordNoticeAccepted = true
+            do { try self.persistSelectedPassword() }
+            catch { self.showError(error.localizedDescription) }
+        }
+    }
+
+    @objc private func addAccount() {
+        guard launchState == .ready else { return }
+        let alert = NSAlert()
+        alert.messageText = "Добавить аккаунт"
+        alert.window.appearance = NSAppearance(named: .darkAqua)
+        alert.informativeText = "Ник будет отправлен форуму Minecraft Galaxy по HTTPS для получения профессии и уровней."
+        alert.addButton(withTitle: "Добавить")
+        alert.addButton(withTitle: "Отмена")
+        let nick = NSTextField(frame: NSRect(x: 0, y: 48, width: 320, height: 30))
+        nick.placeholderString = "Игровой ник"
+        let name = NSTextField(frame: NSRect(x: 0, y: 5, width: 320, height: 30))
+        name.placeholderString = "Название карточки — необязательно"
+        for field in [nick, name] { styleField(field) }
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 85))
+        accessory.addSubview(nick)
+        accessory.addSubview(name)
+        alert.accessoryView = accessory
+        alert.window.initialFirstResponder = nick
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, self.launchState == .ready else { return }
+            do {
+                try self.accounts.add(nickname: nick.stringValue, label: name.stringValue)
+                self.applyAccountSelection()
+            } catch { self.showError(error.localizedDescription) }
+        }
+    }
+
+    @objc private func renameAccount(_ sender: NSButton) {
+        guard launchState == .ready, accounts.accounts.indices.contains(sender.tag) else { return }
+        let account = accounts.accounts[sender.tag]
+        let alert = NSAlert()
+        alert.messageText = "Название карточки"
+        alert.window.appearance = NSAppearance(named: .darkAqua)
+        alert.informativeText = "Игровой ник \(account.nickname) не изменится."
+        alert.addButton(withTitle: "Сохранить")
+        alert.addButton(withTitle: "Отмена")
+        let name = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 30))
+        styleField(name)
+        name.stringValue = account.label
+        name.placeholderString = "Например, основной персонаж"
+        alert.accessoryView = name
+        alert.window.initialFirstResponder = name
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, self.launchState == .ready else { return }
+            do { try self.accounts.rename(account.id, label: name.stringValue); self.rebuildAccounts() }
+            catch { self.showError(error.localizedDescription) }
+        }
+    }
+
+    @objc private func removeAccount(_ sender: NSButton) {
+        guard launchState == .ready, accounts.accounts.indices.contains(sender.tag) else { return }
+        let account = accounts.accounts[sender.tag]
+        let alert = NSAlert()
+        alert.messageText = "Убрать \(account.nickname) из списка?"
+        alert.window.appearance = NSAppearance(named: .darkAqua)
+        alert.informativeText = "Будут удалены карточка и её сохранённый пароль на этом Mac. Игровой аккаунт и файлы игры останутся."
+        alert.addButton(withTitle: "Убрать из списка")
+        alert.addButton(withTitle: "Отмена")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, self.launchState == .ready else { return }
+            do {
+                let wasSelected = self.accounts.selected?.id == account.id
+                try self.passwordStore.remove(for: account)
+                try self.accounts.remove(account.id)
+                self.accountQueue.removeAll { $0 == account.id }
+                self.accountRequestTokens.removeValue(forKey: account.id)
+                self.accountRequests.removeValue(forKey: account.id)?.cancel()
+                self.accountStatus.removeValue(forKey: account.id)
+                self.accountAttempts.removeValue(forKey: account.id)
+                if wasSelected { self.applyAccountSelection() } else { self.rebuildAccounts() }
+                self.pumpAccountRequests()
+            } catch { self.showError(error.localizedDescription) }
+        }
+    }
+
+    @objc private func refreshAccounts() {
+        accounts.accounts.forEach { queueAccountRefresh($0.id, force: true) }
+    }
+
+    private func queueAccountRefresh(_ id: UUID, force: Bool = false) {
+        guard accounts.loadError == nil, let account = accounts.accounts.first(where: { $0.id == id }),
+              accountRequests[id] == nil, !accountQueue.contains(id) else { return }
+        let now = Date()
+        // A manual retry is allowed at most once per 15 seconds per nickname.
+        guard accountAttempts[id].map({ now.timeIntervalSince($0) >= 15 }) ?? true else { return }
+        if !force, let fetched = account.info?.fetchedAt, now.timeIntervalSince(fetched) < 300 { return }
+        accountQueue.append(id)
+        pumpAccountRequests()
+    }
+
+    private func pumpAccountRequests() {
+        while accountRequests.count < 2, !accountQueue.isEmpty {
+            let id = accountQueue.removeFirst()
+            guard let account = accounts.accounts.first(where: { $0.id == id }) else { continue }
+            let token = UUID()
+            accountRequestTokens[id] = token
+            accountAttempts[id] = Date()
+            accountStatus[id] = "Обновление…"
+            let request = accountService.fetch(nickname: account.nickname) { [weak self] result in
+                guard let self, self.accountRequestTokens[id] == token else { return }
+                self.accountRequests.removeValue(forKey: id)
+                self.accountRequestTokens.removeValue(forKey: id)
+                switch result {
+                case .success(let info):
+                    do {
+                        try self.accounts.update(id, nickname: account.nickname, info: info)
+                        self.accountStatus.removeValue(forKey: id)
+                    } catch { self.accountStatus[id] = "Не удалось сохранить данные" }
+                case .failure(let error):
+                    self.accountStatus[id] = error is MCGLAccountError
+                        ? "Профиль недоступен" : "Нет связи с форумом"
+                }
+                self.refreshAccountCards()
+                self.pumpAccountRequests()
+            }
+            accountRequests[id] = request
+        }
+        refreshAccountCards()
     }
 
     private func makeSettingsTab() -> NSView {
@@ -751,15 +1134,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         refreshMemoryControls()
     }
 
-    @objc private func rememberLoginChanged() {
-        preferences.rememberLogin(rememberLoginButton.state == .on,
-                                  login: loginField.stringValue)
-    }
-
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSTextField === loginField {
-            preferences.updateLogin(loginField.stringValue)
+            passwordField.stringValue = ""
+            rememberPasswordButton.state = .off
+            if accounts.selected != nil {
+                try? accounts.select(nil)
+                rebuildAccounts()
+            }
         }
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard launchState == .ready, notification.object as? NSTextField === passwordField else { return }
+        do { try persistSelectedPassword() }
+        catch { showError(error.localizedDescription) }
     }
 
     @objc private func fpsLimitChanged() {
@@ -890,7 +1279,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
 
         let login = loginField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        preferences.updateLogin(login)
         let password = passwordField.stringValue
         guard !login.isEmpty, !password.isEmpty else {
             showError("Введи логин и пароль MCGL.")
@@ -902,6 +1290,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             showError("Не найдена подготовленная ARM64 Java 8.")
             return
         }
+
+        do { try persistSelectedPassword() }
+        catch { showError(error.localizedDescription); return }
 
         prepareOfficialClientAndLaunch(login: login, password: password)
     }
@@ -1178,6 +1569,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private func resetLaunchControls(status: String) {
         statusLabel.stringValue = status
         launchState = .ready
+        if passwordField.stringValue.isEmpty { restoreSelectedPassword() }
         initialMemoryPopUp.isEnabled = true
         maximumMemoryPopUp.isEnabled = true
         multicoreButton.isEnabled = true
