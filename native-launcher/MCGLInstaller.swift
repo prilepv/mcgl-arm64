@@ -17,6 +17,9 @@ final class MCGLInstaller {
     private let jarExecutableURL: URL
     private let resolverLock = NSLock()
     private var resolvedAddressCache: [String: [String]] = [:]
+    // This is the game-patch revision, not the launcher version. The 1.6.6 UI
+    // release reuses 1.6.5 patches and must not reinstall them or migrate
+    // alphaSort again for an existing profile.
     private let portMarker = "Minecraft Galaxy ARM64 bootstrap 1.6.5\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,

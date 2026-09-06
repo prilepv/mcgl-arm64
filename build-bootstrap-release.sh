@@ -3,14 +3,16 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 workspace_dir=${script_dir:h:h}
-version=1.6.5
+version=1.6.6
+dependency_root=${MCGL_BUILD_INPUTS:-$script_dir}
+output_root=${MCGL_RELEASE_OUTPUT_ROOT:-$workspace_dir/dist}
 release_name="Minecraft-Galaxy-ARM64-Bootstrap-${version}"
-release_dir="$workspace_dir/dist/$release_name"
+release_dir="$output_root/$release_name"
 app_dir="$release_dir/Minecraft Galaxy ARM64.app"
 contents_dir="$app_dir/Contents"
 resources_dir="$contents_dir/Resources"
-java_source="$script_dir/zulu8-arm64/Contents/Home"
-bootstrap_build="$script_dir/bootstrap-build"
+java_source="$dependency_root/zulu8-arm64/Contents/Home"
+bootstrap_build="$dependency_root/bootstrap-build"
 runtime_app="$resources_dir/MCGL ARM64 Runtime.app"
 runtime_executable="$runtime_app/Contents/MacOS/MCGL ARM64 Runtime"
 icon_source="$script_dir/native-launcher/Assets/app-icon.png"
@@ -33,7 +35,7 @@ fi
 
 mkdir -p "$contents_dir/MacOS" "$resources_dir/java8-arm64/Home/bin" \
     "$resources_dir/java8-arm64/Home/lib" "$runtime_app/Contents/MacOS" \
-    "$runtime_app/Contents/Resources" "$workspace_dir/dist"
+    "$runtime_app/Contents/Resources" "$output_root"
 
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path /private/tmp/mcgl-swift-module-cache \
@@ -88,24 +90,24 @@ ditto "$bootstrap_build/PortSupport" "$resources_dir/PortSupport"
 ditto "$bootstrap_build/PatchTools" "$resources_dir/PatchTools"
 
 # Build the native window fix and the matching Java-side resize protocol.
-"$java_source/bin/java" -cp "$script_dir/apache-ant-1.10.15/lib/ant-launcher.jar" \
+"$java_source/bin/java" -cp "$dependency_root/apache-ant-1.10.15/lib/ant-launcher.jar" \
     org.apache.tools.ant.launch.Launcher \
-    -f "$script_dir/lwjgl2-modern/platform_build/macosx_ant/build.xml" \
+    -f "$dependency_root/lwjgl2-modern/platform_build/macosx_ant/build.xml" \
     -Djavavmroot="$java_source" -Dsdkroot="$(xcrun --show-sdk-path)" \
     -Djdk_lib="$java_source/jre/lib" > "$release_dir/native-build.log" 2>&1
-ditto "$script_dir/lwjgl2-modern/bin/lwjgl/liblwjgl.dylib" \
+ditto "$dependency_root/lwjgl2-modern/bin/lwjgl/liblwjgl.dylib" \
     "$resources_dir/PortSupport/bin/natives/liblwjgl.dylib"
 
 lwjgl_patch_classes=$(mktemp -d /private/tmp/mcgl-lwjgl-classes.XXXXXX)
 "$java_source/bin/javac" -encoding UTF-8 -source 1.8 -target 1.8 \
     -classpath "$resources_dir/PortSupport/bin/lwjgl.jar" \
     -d "$lwjgl_patch_classes" \
-    "$script_dir/lwjgl2-modern/src/java/org/lwjgl/opengl/Display.java" \
-    "$script_dir/lwjgl2-modern/src/java/org/lwjgl/opengl/MCGLFrameLimiter.java" \
-    "$script_dir/lwjgl2-modern/src/java/org/lwjgl/opengl/MCGLFrameProfiler.java" \
-    "$script_dir/lwjgl2-modern/src/java/org/lwjgl/opengl/MacOSXDisplay.java" \
-    "$script_dir/lwjgl2-modern/src/java/org/lwjgl/opengl/MacOSXNativeMouse.java" \
-    "$script_dir/lwjgl2-modern/src/generated/org/lwjgl/opengl/GL11.java"
+    "$script_dir/third-party/lwjgl2-overlay/src/java/org/lwjgl/opengl/Display.java" \
+    "$script_dir/third-party/lwjgl2-overlay/src/java/org/lwjgl/opengl/MCGLFrameLimiter.java" \
+    "$script_dir/third-party/lwjgl2-overlay/src/java/org/lwjgl/opengl/MCGLFrameProfiler.java" \
+    "$script_dir/third-party/lwjgl2-overlay/src/java/org/lwjgl/opengl/MacOSXDisplay.java" \
+    "$script_dir/third-party/lwjgl2-overlay/src/java/org/lwjgl/opengl/MacOSXNativeMouse.java" \
+    "$script_dir/third-party/lwjgl2-overlay/src/generated/org/lwjgl/opengl/GL11.java"
 "$java_source/bin/jar" uf "$resources_dir/PortSupport/bin/lwjgl.jar" \
     -C "$lwjgl_patch_classes" org/lwjgl/opengl
 
@@ -148,7 +150,7 @@ codesign --verify --deep --strict "$app_dir"
 bash "$script_dir/tools/audit-portable-release.sh" "$app_dir"
 
 (
-    cd "$workspace_dir/dist"
+    cd "$output_root"
     ditto -c -k --sequesterRsrc --keepParent "$release_name" "$release_name.zip"
     shasum -a 256 "$release_name.zip" > "$release_name.zip.sha256"
 )

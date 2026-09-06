@@ -29,11 +29,28 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" -o "$result_dir/launcher"
+swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework Cocoa -framework CryptoKit \
+    "$source_root/native-launcher/MCGLNativeLauncher.swift" \
+    "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
+    "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
+    "$source_root/tests/LauncherUITest.swift" -o "$result_dir/ui-test"
+"$result_dir/ui-test"
+swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework Cocoa \
+    "$source_root/tests/ImageAssetTest.swift" -o "$result_dir/image-test"
+"$result_dir/image-test" "$source_root/native-launcher/Assets/app-icon.png"
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework CryptoKit \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/tests/LauncherUpdaterTest.swift" -o "$result_dir/updater-test"
 "$result_dir/updater-test"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework CryptoKit \
+    "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
+    "$source_root/tests/LauncherUpgradeTest.swift" -o "$result_dir/upgrade-test"
+"$result_dir/upgrade-test"
 swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" \
     "$source_root/tools/BuildICNS.swift" -o "$result_dir/build-icns"

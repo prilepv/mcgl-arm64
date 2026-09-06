@@ -31,6 +31,21 @@ struct LauncherPreferencesTest {
         let migrated = MCGLLauncherPreferences(defaults: oldDefaults)
         precondition(migrated.initialMemoryMB == 4096)
         precondition(migrated.maximumMemoryMB == 4096)
-        print("LAUNCHER_PREFERENCES_PASS independent Xms/Xmx, clamping and 1.6.4 migration")
+
+        // Existing 1.6.5 settings must survive a UI-only 1.6.6 upgrade.
+        oldDefaults.set(1024, forKey: "MCGLInitialMemoryMB")
+        oldDefaults.set(144, forKey: "MCGLFPSLimit")
+        oldDefaults.set(false, forKey: "MCGLChunkVBO")
+        oldDefaults.set(false, forKey: "MCGLMulticoreMemoryProfile")
+        oldDefaults.set(true, forKey: "MCGLGraphicsDiagnostics")
+        oldDefaults.set(true, forKey: "MCGLRememberLogin")
+        oldDefaults.set("test-player", forKey: "MCGLSavedLogin")
+        let upgraded = MCGLLauncherPreferences(defaults: oldDefaults)
+        precondition(upgraded.initialMemoryMB == 1024)
+        precondition(upgraded.maximumMemoryMB == 4096)
+        precondition(upgraded.fpsLimit == 144 && !upgraded.chunkVbo)
+        precondition(!upgraded.multicoreMemory && upgraded.graphicsDiagnostics)
+        precondition(upgraded.savedLogin == "test-player")
+        print("LAUNCHER_PREFERENCES_PASS independent Xms/Xmx, clamping, 1.6.4 migration and 1.6.5 settings retention")
     }
 }
