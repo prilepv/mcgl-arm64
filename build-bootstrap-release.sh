@@ -15,7 +15,7 @@ java_source="$dependency_root/zulu8-arm64/Contents/Home"
 bootstrap_build="$dependency_root/bootstrap-build"
 runtime_app="$resources_dir/MCGL ARM64 Runtime.app"
 runtime_executable="$runtime_app/Contents/MacOS/MCGL ARM64 Runtime"
-icon_source="$script_dir/native-launcher/Assets/app-icon.png"
+icon_symbol="$script_dir/native-launcher/Assets/app-icon-symbol.png"
 background_source="$script_dir/native-launcher/Assets/launcher-background.png"
 
 icon_work=$(mktemp -d /private/tmp/mcgl-icon.XXXXXX)
@@ -50,16 +50,20 @@ ditto "$script_dir/native-launcher/Info.plist" "$contents_dir/Info.plist"
 ditto "$script_dir/arm64-runtime/Info.plist" "$runtime_app/Contents/Info.plist"
 iconset="$icon_work/app.iconset"
 mkdir -p "$iconset"
-sips -z 16 16 "$icon_source" --out "$iconset/icon_16x16.png" >/dev/null
-sips -z 32 32 "$icon_source" --out "$iconset/icon_16x16@2x.png" >/dev/null
-sips -z 32 32 "$icon_source" --out "$iconset/icon_32x32.png" >/dev/null
-sips -z 64 64 "$icon_source" --out "$iconset/icon_32x32@2x.png" >/dev/null
-sips -z 128 128 "$icon_source" --out "$iconset/icon_128x128.png" >/dev/null
-sips -z 256 256 "$icon_source" --out "$iconset/icon_128x128@2x.png" >/dev/null
-sips -z 256 256 "$icon_source" --out "$iconset/icon_256x256.png" >/dev/null
-sips -z 512 512 "$icon_source" --out "$iconset/icon_256x256@2x.png" >/dev/null
-sips -z 512 512 "$icon_source" --out "$iconset/icon_512x512.png" >/dev/null
-sips -z 1024 1024 "$icon_source" --out "$iconset/icon_512x512@2x.png" >/dev/null
+swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$icon_work/modules" -framework Cocoa \
+    "$script_dir/tools/ComposeAppIcon.swift" -o "$icon_work/compose-icon"
+render_icon() { "$icon_work/compose-icon" "$icon_symbol" "$iconset/$1" "$2"; }
+render_icon icon_16x16.png 16
+render_icon icon_16x16@2x.png 32
+render_icon icon_32x32.png 32
+render_icon icon_32x32@2x.png 64
+render_icon icon_128x128.png 128
+render_icon icon_128x128@2x.png 256
+render_icon icon_256x256.png 256
+render_icon icon_256x256@2x.png 512
+render_icon icon_512x512.png 512
+render_icon icon_512x512@2x.png 1024
 swiftc -parse-as-library -swift-version 5 -module-cache-path "$icon_work/modules" \
     "$script_dir/tools/BuildICNS.swift" \
     -o "$icon_work/build-icns"

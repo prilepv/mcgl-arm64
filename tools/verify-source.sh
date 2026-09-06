@@ -40,7 +40,19 @@ swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
 swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework Cocoa \
     "$source_root/tests/ImageAssetTest.swift" -o "$result_dir/image-test"
-"$result_dir/image-test" "$source_root/native-launcher/Assets/app-icon.png"
+"$result_dir/image-test" "$source_root/native-launcher/Assets/app-icon-symbol.png"
+"$result_dir/image-test" "$source_root/native-launcher/Assets/app-icon.png" --white-tile
+"$result_dir/image-test" "$source_root/docs/forum-icon-1.6.6-macos.png" --white-tile
+swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework Cocoa \
+    "$source_root/tools/ComposeAppIcon.swift" -o "$result_dir/compose-icon"
+for icon_size in 16 32 64 128 220 256 512 1024; do
+    "$result_dir/compose-icon" "$source_root/native-launcher/Assets/app-icon-symbol.png" \
+        "$result_dir/icon-$icon_size.png" "$icon_size"
+    "$result_dir/image-test" "$result_dir/icon-$icon_size.png" --white-tile
+done
+cmp "$result_dir/icon-1024.png" "$source_root/native-launcher/Assets/app-icon.png"
+cmp "$result_dir/icon-220.png" "$source_root/docs/forum-icon-1.6.6-macos.png"
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework CryptoKit \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
