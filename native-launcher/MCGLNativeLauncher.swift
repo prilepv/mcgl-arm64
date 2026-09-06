@@ -136,13 +136,17 @@ final class LauncherBackgroundView: NSView {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
     private let preferences: MCGLLauncherPreferences
+    private let resourcesOverride: URL?
     private let updater = MCGLLauncherUpdater()
 
-    init(preferences: MCGLLauncherPreferences = MCGLLauncherPreferences()) {
+    init(preferences: MCGLLauncherPreferences = MCGLLauncherPreferences(),
+         resourcesRoot: URL? = nil) {
         self.preferences = preferences
+        self.resourcesOverride = resourcesRoot
         super.init()
     }
     private lazy var resourcesRoot: URL = {
+        if let resourcesOverride { return resourcesOverride }
         guard let resourceURL = Bundle.main.resourceURL else {
             fatalError("Application resources are unavailable")
         }
@@ -250,7 +254,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         divider.wantsLayer = true
         divider.layer?.backgroundColor = GalaxyTheme.line.cgColor
         let icon = NSImageView()
-        icon.image = NSImage(contentsOf: resourcesRoot.appendingPathComponent("app.icns"))
+        // The sidebar uses the transparent mark, not the white Dock/Finder tile.
+        icon.identifier = NSUserInterfaceItemIdentifier("launcher-brand-symbol")
+        icon.image = NSImage(contentsOf: resourcesRoot.appendingPathComponent("app-icon-symbol.png"))
         icon.imageScaling = .scaleProportionallyUpOrDown
         let brand = label("GALAXY", size: 22, weight: .bold)
         let brandDetail = label("APPLE SILICON", size: 10, weight: .medium, color: GalaxyTheme.muted)

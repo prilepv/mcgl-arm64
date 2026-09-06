@@ -36,7 +36,7 @@ swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLInstaller.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/tests/LauncherUITest.swift" -o "$result_dir/ui-test"
-"$result_dir/ui-test"
+"$result_dir/ui-test" "$source_root/native-launcher/Assets"
 swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework Cocoa \
     "$source_root/tests/ImageAssetTest.swift" -o "$result_dir/image-test"

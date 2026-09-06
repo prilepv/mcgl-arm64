@@ -70,6 +70,7 @@ swiftc -parse-as-library -swift-version 5 -module-cache-path "$icon_work/modules
 "$icon_work/build-icns" "$iconset" "$icon_work/app.icns"
 ditto "$icon_work/app.icns" "$runtime_app/Contents/Resources/app.icns"
 ditto "$icon_work/app.icns" "$resources_dir/app.icns"
+ditto "$icon_symbol" "$resources_dir/app-icon-symbol.png"
 ditto "$background_source" "$resources_dir/launcher-background.png"
 
 xcrun clang -x objective-c -arch arm64 -mmacosx-version-min=14.0 \
