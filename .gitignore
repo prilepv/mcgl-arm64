@@ -35,3 +35,6 @@ Credentials/
 /mclient-arm64/
 /.idea/
 /.vscode/
+*.bbcode
+*.bbcode.*
+FORUM-POST-*

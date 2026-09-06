@@ -22,4 +22,3 @@ DemoMiner и DemoBuilder — демонстрационные аккаунты, 
 - [Аккаунты](https://raw.githubusercontent.com/prilepv/mcgl-arm64/v1.6.7/docs/screenshots/1.6.7/launcher-accounts.png)
 - [Настройки](https://raw.githubusercontent.com/prilepv/mcgl-arm64/v1.6.7/docs/screenshots/1.6.7/launcher-settings.png)
 - [Журнал](https://raw.githubusercontent.com/prilepv/mcgl-arm64/v1.6.7/docs/screenshots/1.6.7/launcher-log.png)
-
