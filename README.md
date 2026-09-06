@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/branding/project-icon.png" width="144" alt="Minecraft Galaxy ARM64">
+  <img src="docs/branding/project-icon-rounded.png" width="144" alt="Minecraft Galaxy ARM64">
 </p>
 
 <h1 align="center">Minecraft Galaxy ARM64</h1>

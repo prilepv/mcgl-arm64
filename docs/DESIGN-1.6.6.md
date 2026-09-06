@@ -40,6 +40,12 @@ Use case: precise-object-edit. Asset type: final square GitHub/forum project ava
 
 ## Ресурсы
 
+После публикации исправлена отдельная картинка для форума и GitHub: тёмная
+скруглённая плашка сохранена, пространство снаружи неё сделано прозрачным.
+Текущие файлы: `docs/branding/project-icon-rounded.png` и
+`docs/forum-icon-1.6.6-rounded.png`. Иконка внутри приложения и DMG не менялись.
+Подробности правки: [иконки для публикаций](branding/README.md).
+
 - `native-launcher/Assets/launcher-background.png` — фон, 1536 × 1024.
 - `native-launcher/Assets/app-icon.png` — исходник иконки с альфа-каналом, 1254 × 1254.
 - `docs/branding/project-icon.png` — отдельная иконка с тёмным фоном для GitHub, 1254 × 1254.
