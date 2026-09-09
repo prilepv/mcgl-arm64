@@ -45,7 +45,7 @@ struct CaptureLauncherScreenshots {
         window.orderBack(nil)
         defer { window.orderOut(nil) }
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        for (index, name) in ["play", "accounts", "settings", "log"].enumerated() {
+        for (index, name) in ["play", "accounts", "settings", "log", "changes"].enumerated() {
             let button = descendants(root).compactMap { $0 as? NSButton }
                 .first { $0.identifier?.rawValue == "page-\(index)" }!
             button.performClick(nil)

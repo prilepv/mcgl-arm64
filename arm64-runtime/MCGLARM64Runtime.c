@@ -210,8 +210,8 @@ int main(int argc, char **argv) {
     NSAutoreleasePool *appkit_pool = [[NSAutoreleasePool alloc] init];
     NSString *runtime_bundle_path = [[NSBundle mainBundle] bundlePath];
     NSString *resources_root = [runtime_bundle_path stringByDeletingLastPathComponent];
-    NSString *java_home_path = [resources_root stringByAppendingPathComponent:@"java8-arm64/Home"];
-    NSString *java_runtime_home_path = [java_home_path stringByAppendingPathComponent:@"jre"];
+    NSString *java_home_path = [resources_root stringByAppendingPathComponent:@"java21-arm64/Home"];
+    NSString *java_runtime_home_path = java_home_path;
     NSString *jvm_path = [java_runtime_home_path stringByAppendingPathComponent:@"lib/server/libjvm.dylib"];
     NSString *game_path = [NSString stringWithUTF8String:game_directory];
     NSString *native_directory = [game_path stringByAppendingPathComponent:@"bin/natives"];
@@ -282,9 +282,13 @@ int main(int argc, char **argv) {
     snprintf(java_home_option, sizeof(java_home_option),
              "-Djava.home=%s", [java_runtime_home_path fileSystemRepresentation]);
 
-    JavaVMOption options[20];
+    JavaVMOption options[24];
     jint option_count = 0;
 #define ADD_VM_OPTION(value) do { \
+    if (option_count >= (jint)(sizeof(options) / sizeof(options[0]))) { \
+        fprintf(stderr, "Runtime: JVM option capacity exceeded.\n"); \
+        return 82; \
+    } \
     options[option_count].optionString = (value); \
     options[option_count].extraInfo = NULL; \
     option_count++; \
@@ -311,6 +315,11 @@ int main(int argc, char **argv) {
             initial_memory_mb, memory_limit_mb,
             initial_memory_mb == memory_limit_mb ? " (preallocated)" : "");
     ADD_VM_OPTION("-Djava.awt.headless=true");
+    // Preserve the peerless Applet and existing macOS foreground bridge.
+    ADD_VM_OPTION("--add-opens=java.desktop/java.awt=ALL-UNNAMED");
+    ADD_VM_OPTION("--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED");
+    // LWJGL 2 WaveData.create(URL) uses this legacy WAV reader.
+    ADD_VM_OPTION("--add-exports=java.desktop/com.sun.media.sound=ALL-UNNAMED");
     ADD_VM_OPTION("-Dsun.java2d.opengl=false");
     ADD_VM_OPTION(java_library_path);
     ADD_VM_OPTION(lwjgl_library_path);
@@ -328,6 +337,7 @@ int main(int argc, char **argv) {
         fprintf(stdout,
                 "Runtime: multicore memory profile enabled (G1GC, parallel references, string deduplication).\n");
     } else {
+        ADD_VM_OPTION("-XX:+UseParallelGC");
         fprintf(stdout, "Runtime: standard ParallelGC memory profile enabled.\n");
     }
 
@@ -341,11 +351,9 @@ int main(int argc, char **argv) {
     }
     const char *chunk_vbo = getenv("MCGL_CHUNK_VBO");
     if (chunk_vbo != NULL && strcmp(chunk_vbo, "1") == 0) {
-        ADD_VM_OPTION("-Dmcgl.chunk.vbo=true");
-        fprintf(stdout, "Runtime: experimental terrain VBO enabled.\n");
-    } else {
-        fprintf(stdout, "Runtime: original terrain display-list renderer.\n");
+        fprintf(stdout, "Runtime: obsolete MCGL_CHUNK_VBO switch ignored; the game uses the Core chunk renderer.\n");
     }
+    fprintf(stdout, "Runtime: Core 4.1 game renderer with indexed chunk geometry; actual context is verified at window creation.\n");
 #undef ADD_VM_OPTION
 
     void *jvm_library = dlopen([jvm_path fileSystemRepresentation], RTLD_NOW | RTLD_GLOBAL);
@@ -369,7 +377,7 @@ int main(int argc, char **argv) {
 
     JavaVM *vm = NULL;
     JNIEnv *environment = NULL;
-    fprintf(stdout, "Runtime: creating native ARM64 Java 8 VM on the macOS application main thread.\n");
+    fprintf(stdout, "Runtime: creating native ARM64 Java 21 VM on the macOS application main thread.\n");
     jint result = create_vm(&vm, (void **)&environment, &vm_arguments);
     if (result != JNI_OK) {
         fprintf(stderr, "JNI_CreateJavaVM returned %d.\n", result);

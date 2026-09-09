@@ -1,0 +1,24 @@
+diff --git a/src/cocoa_window.m b/src/cocoa_window.m
+--- a/src/cocoa_window.m
++++ b/src/cocoa_window.m
+@@ -225,6 +225,20 @@
+     return self;
+ }
+ 
++// Preserve GLFW's delegate. The host's Spaces controller observes normal
++// AppKit notifications; AppKit reports transition failure only to the delegate.
++- (void)windowDidFailToEnterFullScreen:(NSWindow *)nativeWindow
++{
++    [[NSNotificationCenter defaultCenter]
++        postNotificationName:@"MCGLWindowDidFailToEnterFullScreen" object:nativeWindow];
++}
++
++- (void)windowDidFailToExitFullScreen:(NSWindow *)nativeWindow
++{
++    [[NSNotificationCenter defaultCenter]
++        postNotificationName:@"MCGLWindowDidFailToExitFullScreen" object:nativeWindow];
++}
++
+ - (BOOL)windowShouldClose:(id)sender
+ {
+     _glfwInputWindowCloseRequest(window);

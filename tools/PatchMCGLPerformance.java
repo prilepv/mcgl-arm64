@@ -264,6 +264,27 @@ public final class PatchMCGLPerformance implements Opcodes {
             }
         }
         require(toggle != null && run != null, "fullscreen/run methods");
+        String fullscreenField = null;
+        for (AbstractInsnNode ins : toggle.instructions.toArray()) if (ins instanceof MethodInsnNode) {
+            MethodInsnNode call = (MethodInsnNode) ins;
+            if (!call.owner.equals(DISPLAY) || !call.name.equals("setFullscreen") || !call.desc.equals("(Z)V")) continue;
+            AbstractInsnNode previous = ins.getPrevious();
+            while (previous != null && previous.getOpcode() < 0) previous = previous.getPrevious();
+            require(previous instanceof FieldInsnNode && previous.getOpcode() == GETFIELD
+                    && ((FieldInsnNode) previous).owner.equals(c.name)
+                    && ((FieldInsnNode) previous).desc.equals("Z"), "fullscreen request field");
+            String field = ((FieldInsnNode) previous).name;
+            require(fullscreenField == null || fullscreenField.equals(field), "single fullscreen state field");
+            fullscreenField = field;
+        }
+        require(fullscreenField != null, "fullscreen state field");
+        // The green button can change fullscreen without calling the game's
+        // toggle. Read the platform's requested state before inverting it.
+        InsnList syncFullscreen = new InsnList();
+        syncFullscreen.add(new VarInsnNode(ALOAD, 0));
+        syncFullscreen.add(call(INVOKESTATIC, DISPLAY, "isFullscreen", "()Z"));
+        syncFullscreen.add(new FieldInsnNode(PUTFIELD, c.name, fullscreenField, "Z"));
+        toggle.instructions.insert(syncFullscreen);
         for (AbstractInsnNode ins : toggle.instructions.toArray()) if (ins instanceof MethodInsnNode) {
             MethodInsnNode i = (MethodInsnNode)ins;
             if (i.getOpcode() == INVOKESPECIAL && i.owner.equals(c.name) && i.desc.equals("(II)V")) resize = i.name;
@@ -316,11 +337,30 @@ public final class PatchMCGLPerformance implements Opcodes {
         }
         require(active == 1 && automaticToggle == 1, "focus-loss fullscreen branch");
         require(canvasWidth == 2 && canvasHeight == 2, "Canvas dimension reads");
+        int fullscreenResize = 0;
+        for (AbstractInsnNode ins : toggle.instructions.toArray()) if (ins instanceof MethodInsnNode) {
+            MethodInsnNode i = (MethodInsnNode)ins;
+            if (i.owner.equals(DISPLAY) && i.name.equals("update") && i.desc.equals("()V")) {
+                // MCGL caches the requested mode before setFullscreen. GLFW may
+                // select another actual size, so update the viewport/GUI only
+                // after the native transition and its events have completed.
+                InsnList hook = new InsnList();
+                hook.add(new VarInsnNode(ALOAD, 0));
+                hook.add(call(INVOKESPECIAL, c.name, "mcglResizeWindow", "()V"));
+                toggle.instructions.insert(i, hook);
+                fullscreenResize++;
+            }
+        }
+        require(fullscreenResize == 1, "post-fullscreen resize");
         MethodNode m = new MethodNode(ACC_PRIVATE, "mcglResizeWindow", "()V", null, null);
         Label end = new Label();
         m.visitCode();
+        // Also synchronize while no resize is pending (system button/failure).
+        m.visitVarInsn(ALOAD, 0);
         m.visitMethodInsn(INVOKESTATIC, DISPLAY, "isFullscreen", "()Z");
-        m.visitJumpInsn(IFNE, end);
+        m.visitFieldInsn(PUTFIELD, c.name, fullscreenField, "Z");
+        // Actual dimensions are authoritative in both modes, including delayed
+        // fullscreen/monitor callbacks. Ignore zero-sized minimized drawables.
         m.visitMethodInsn(INVOKESTATIC, DISPLAY, "wasResized", "()Z");
         m.visitJumpInsn(IFEQ, end);
         m.visitMethodInsn(INVOKESTATIC, DISPLAY, "getWidth", "()I"); m.visitVarInsn(ISTORE, 1);

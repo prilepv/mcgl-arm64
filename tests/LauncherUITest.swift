@@ -100,7 +100,9 @@ struct LauncherUITest {
         delegate.previewLaunchStateForTesting(.ready)
         var checkedLabels = 0
         let checkboxIDs = ["multicoreMemory", "chunkVbo", "graphicsDiagnostics"]
-        for index in [0, 1, 2, 3, 0] {
+        precondition(button("page-4").title == "Изменения •")
+        precondition(button("page-4").keyEquivalent == "5")
+        for index in [0, 1, 2, 3, 4, 0] {
             button("page-\(index)").performClick(nil)
             root.layoutSubtreeIfNeeded()
             precondition(control.keyEquivalent == (index == 0 ? "\r" : ""))
@@ -110,6 +112,31 @@ struct LauncherUITest {
                 log.scrollToEndOfDocument(nil)
                 precondition(log.enclosingScrollView!.contentView.bounds.origin.x == 0,
                              "Log scrolled horizontally and clipped its first characters")
+            }
+            if index == 4 {
+                precondition(button("page-4").title == "Изменения")
+                precondition(preferences.lastReadChangelogVersion == "1.7.0")
+                let scroll = descendants(root).compactMap { $0 as? NSScrollView }
+                    .first { $0.identifier?.rawValue == "changelog-scroll" }!
+                let document = scroll.documentView!
+                precondition(document.frame.height > scroll.contentView.bounds.height)
+                for entry in MCGLChangelog.entries {
+                    let card = descendants(document).first { $0.identifier?.rawValue == "changelog-\(entry.version)" }!
+                    precondition(!card.hasAmbiguousLayout && card.frame.width > 700 && card.frame.height > 180)
+                    let body = descendants(card).compactMap { $0 as? NSTextField }
+                        .first { $0.identifier?.rawValue == "changelog-body-\(entry.version)" }!
+                    precondition(body.stringValue == entry.points.map { "•  " + $0 }.joined(separator: "\n"))
+                    let required = body.cell!.cellSize(forBounds: NSRect(x: 0, y: 0, width: body.bounds.width, height: 10000))
+                    precondition(body.bounds.height + 2 >= required.height, "Clipped changelog body: \(entry.version)")
+                    precondition(button("changelog-link-\(entry.version)").toolTip == entry.releaseURL.absoluteString)
+                }
+                let installed = descendants(document).compactMap { $0 as? NSTextField }
+                    .filter { $0.stringValue == "УСТАНОВЛЕНА" }
+                precondition(installed.count == 1 && installed[0].identifier?.rawValue == "changelog-status-1.7.0")
+                document.scroll(NSPoint(x: 200, y: document.bounds.height))
+                precondition(scroll.contentView.bounds.origin.x == 0 && scroll.contentView.bounds.origin.y > 500)
+                document.scroll(.zero)
+                precondition(scroll.contentView.bounds.origin.y == 0)
             }
             if index == 0 && checkedLabels > 0 { continue }
             for checkbox in descendants(root).compactMap({ $0 as? NSButton })
@@ -178,7 +205,7 @@ struct LauncherUITest {
             let png = preview.representation(using: .png, properties: [:])!
             try! png.write(to: URL(fileURLWithPath: arguments[2]), options: .atomic)
             let folder = URL(fileURLWithPath: arguments[2]).deletingLastPathComponent()
-            for (index, name) in [(1, "accounts"), (2, "settings"), (3, "log")] {
+            for (index, name) in [(1, "accounts"), (2, "settings"), (3, "log"), (4, "changes")] {
                 button("page-\(index)").performClick(nil)
                 root.layoutSubtreeIfNeeded()
                 let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
@@ -187,7 +214,7 @@ struct LauncherUITest {
                     to: folder.appendingPathComponent("launcher-\(name).png"), options: .atomic)
             }
         }
-        print("LAUNCHER_UI_PASS four pages; light labels; password clearing; launch locks; late response routing; offline cache; isolated preferences, no network/game")
+        print("LAUNCHER_UI_PASS five pages; readable offline release cards; read badge; light labels; password clearing; launch locks; late response routing; isolated preferences, no network/game")
         guard CommandLine.arguments.contains("--forms") else { return }
         button("page-1").performClick(nil)
         // AppKit defers sheet attachment for a never-ordered window. Keep this

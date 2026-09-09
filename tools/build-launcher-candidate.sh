@@ -7,6 +7,10 @@ if [[ $# != 2 || "$2" != /* ]]; then
     exit 64
 fi
 source_root=$(cd "$(dirname "$0")/.." && pwd)
+if rg -q 'java21-arm64' "$source_root/native-launcher/MCGLNativeLauncher.swift"; then
+    echo 'Historical Java 8 runtime reuse cannot build the Java 21 launcher. Use build-bootstrap-release.sh.' >&2
+    exit 65
+fi
 baseline=$(cd "$1" && pwd -P)
 output="$2"
 [[ ! -e "$output" && ! -L "$output" ]] || { echo 'Output already exists; refusing overwrite.' >&2; exit 1; }
@@ -28,6 +32,7 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
+    "$source_root/native-launcher/MCGLChangelog.swift" \
     -o "$app/Contents/MacOS/MCGL ARM64 Launcher"
 ditto "$source_root/native-launcher/Info.plist" "$app/Contents/Info.plist"
 ditto "$source_root/native-launcher/Assets/Professions" "$app/Contents/Resources/Professions"

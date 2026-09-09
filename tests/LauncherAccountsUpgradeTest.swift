@@ -50,7 +50,10 @@ struct LauncherAccountsUpgradeTest {
                     }
                     return
                 }
-            case .success(.current): passed = MCGLLauncherUpdater.currentVersion == "1.6.7"
+            case .success(.current):
+                // The same 1.6.7 fixture must not offer a downgrade to newer milestones.
+                // Historical 1.6.5/1.6.6 must still take the available branch.
+                passed = !MCGLLauncherUpdater.isNewer("1.6.7", than: MCGLLauncherUpdater.currentVersion)
             case .failure: break
             }
             done.signal()

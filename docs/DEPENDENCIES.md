@@ -1,4 +1,56 @@
-# Зависимости и происхождение порта 1.6.7
+# Зависимости и происхождение порта 1.7.0
+
+Текущий выпуск: Java 21.0.12.1 ARM64, LWJGL 3.4.3 build 4, GLFW 3.5.1,
+OpenAL Soft 1.25.2 и собственные платформенный/Core-рендер слои.
+Версии зафиксированы локальными проверками и SHA-256 ниже; это не обозначение
+«последних доступных» версий. Далее также сохранена история их внедрения.
+
+Java 21 проверена в 1.6.8, LWJGL 3 — в 1.6.9. Проверенная сборка 1.6.10 заменяет старый
+Cocoa/window/input backend на GLFW, сохраняя OpenAL Soft. Аудиты:
+[Java 21](modernization/01-java21.md), [LWJGL 3](modernization/02-lwjgl3.md),
+[GLFW](modernization/03-glfw.md).
+
+В проверенной локальной 1.6.11 версии зависимостей не меняются. Оконные интерфейсы, GLFW backend,
+macOS JNI-мост и пути нативных библиотек вынесены в `platform/`;
+см. [границы платформенного слоя](modernization/04-platform.md).
+
+В 1.6.12 добавляется собственный модуль `renderer/` и типизированный мост
+для графических вызовов. Новых сторонних зависимостей и обновлений версий нет;
+генератор и патчер используют уже встроенный ASM. См.
+[архитектуру рендера](modernization/05-render-architecture.md).
+
+Исходники 1.6.13 добавляют Core 4.1-контекстный путь на тех же LWJGL/GLFW,
+без новых зависимостей. На момент этапа 6 проверки были отложены; позднее
+Core-контекст, материалы и геометрия проверены, а игровая отрисовка подключена
+и принята в этапе 10. Публичная 1.7.0 использует игровой Core-путь.
+См. [Core-контекст](modernization/06-core41.md).
+
+Исходники 1.6.14 содержат собственные GLSL 4.10-ресурсы и управление программами
+на существующих LWJGL OpenGL 4.1 bindings. Новых сторонних компонентов нет;
+см. [shader pipeline](modernization/07-shader-pipeline.md). Отложенные тогда
+проверки выполнены в последующих общих контрольных прогонах.
+
+## GLFW — 1.6.10
+
+Java-модуль `org.lwjgl:lwjgl-glfw:3.4.3` из Maven Central:
+[SHA-256](../third-party/glfw-sha256.txt).
+Native GLFW 3.5.1 собирается из официального коммита
+`d9d6f0f1f967807ffade6598ea9a631ebaf37a56` с узким патчем блокировки NSGL update
+и уведомлениями об отказе переходов AppKit fullscreen.
+[Происхождение и изменение](../third-party/GLFW-BUILD.md),
+[SHA-256 исходников](../third-party/glfw-source-sha256.txt),
+[лицензия](../third-party/GLFW-LICENSE.txt).
+Официальный native JAR использовался для первого кандидата; финальный native
+не заявляется идентичным этому бинарнику.
+
+## LWJGL 3 — текущая библиотека
+
+Версия **3.4.3 build 4**, официальные core/OpenGL/OpenAL JAR и ARM64 core/OpenGL
+natives из Maven Central. Точные SHA-256: [lockfile](../third-party/lwjgl3-sha256.txt).
+[Релиз](https://github.com/LWJGL/lwjgl3/releases/tag/3.4.3),
+[BSD 3-Clause](../third-party/LWJGL3-LICENSE.txt).
+Из LWJGL 2 остаётся выбранный platform-neutral Java API совместимости.
+Старый Cocoa backend и сгенерированные GL/AL native-биндинги не включены.
 
 История разработки до публикации не импортируется: рабочая папка порта не была
 единым git-репозиторием. Первый коммит — снимок отобранных исходников 1.6.4,
@@ -38,7 +90,7 @@ Overlay включает Java/Cocoa-изменения, ARM64-настройки
 - Лицензия: [GNU LGPL version 2 or later](../third-party/OPENAL-SOFT-LICENSE.txt).
 - [Исходники использованной версии](https://github.com/kcat/openal-soft/tree/b2c48f7718ef3fcf67921a8b6534c4914e328970).
 
-## Azul Zulu OpenJDK 8
+## Azul Zulu OpenJDK 8 — историческая база 1.6.7
 
 - ARM64 Java `1.8.0_502-b07`, Zulu `8.96.0.19`.
 - В DMG находится готовая среда выполнения; в git её бинарники не включены.
@@ -48,6 +100,19 @@ Overlay включает Java/Cocoa-изменения, ARM64-настройки
   [страница загрузок](https://www.azul.com/downloads/).
 - OpenJDK-компоненты: GPLv2 с Classpath Exception; остальные компоненты имеют
   собственные уведомления. MIT этого репозитория к ним не относится.
+
+## Azul Zulu OpenJDK 21 — текущая среда 1.7.0
+
+- Zulu `21.52+203-CA`, Java `21.0.12.1+1-LTS`, macOS `aarch64`, обычный GA JDK
+  без JavaFX/CRaC. Java 8 выше описывает неизменную базу 1.6.7.
+- Архив: `zulu21.52.203-ca-jdk21.0.12.1-macosx_aarch64.tar.gz`.
+- SHA-256: `042093e0895c940a02d68e727bc37b59f3958e58aa1463ec9080845d77af0a45`,
+  проверен по метаданным Azul; package UUID `b4998dfa-d693-42ae-b745-e2140eb4ecb9`.
+- [Метаданные поставщика](https://api.azul.com/metadata/v1/zulu/packages/b4998dfa-d693-42ae-b745-e2140eb4ecb9),
+  [архив поставщика](https://cdn.azul.com/zulu/bin/zulu21.52.203-ca-jdk21.0.12.1-macosx_aarch64.tar.gz).
+- В `.app`: полный `Contents/Resources/java21-arm64/Home`, включая `legal`
+  и `DISCLAIMER`. Бинарники не добавляются в Git. Лицензии компонентов
+  сохраняются; MIT проекта на JDK не распространяется.
 
 ## ASM и инструменты сборки
 

@@ -39,7 +39,8 @@ struct MCGLGitHubRelease: Decodable {
 }
 
 final class MCGLLauncherUpdater {
-    static let currentVersion = "1.6.7"
+    // The installed app is authoritative; the fallback is for standalone tools/tests.
+    static let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.7.0"
     static let releasesPage = URL(string: "https://github.com/prilepv/mcgl-arm64/releases")!
     private static let latestReleaseAPI = URL(
         string: "https://api.github.com/repos/prilepv/mcgl-arm64/releases/latest")!

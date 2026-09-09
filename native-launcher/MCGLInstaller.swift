@@ -17,10 +17,9 @@ final class MCGLInstaller {
     private let jarExecutableURL: URL
     private let resolverLock = NSLock()
     private var resolvedAddressCache: [String: [String]] = [:]
-    // This is the game-patch revision, not the launcher version. The 1.6.6 UI
-    // release reuses 1.6.5 patches and must not reinstall them or migrate
-    // alphaSort again for an existing profile.
-    private let portMarker = "Minecraft Galaxy ARM64 bootstrap 1.6.5\n"
+    // Separate from launcher version. LWJGL 3 requires fresh original JARs
+    // before the existing game transforms and the final binding-only adapter.
+    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-5\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,
         URL(string: "http://f3.mcgl.ru/mclient/")!,
@@ -72,7 +71,7 @@ final class MCGLInstaller {
         }
         guard fileManager.isExecutableFile(atPath: javaExecutableURL.path),
               fileManager.isExecutableFile(atPath: jarExecutableURL.path) else {
-            throw installerError("в приложении отсутствуют инструменты Java 8")
+            throw installerError("в приложении отсутствуют инструменты Java 21")
         }
 
         try fileManager.createDirectory(at: supportRootURL,
@@ -119,9 +118,9 @@ final class MCGLInstaller {
 
             if !exists {
                 requiresDownload = true
-            } else if entry.path == "bin/mcgl.jar" {
-                // The installed jar contains our fullscreen bytecode patch, so
-                // its checksum intentionally differs from the official file.
+            } else if entry.path == "bin/mcgl.jar" || entry.path == "bin/lwjgl_util.jar" {
+                // These installed JARs contain local bytecode transformations;
+                // their checksums intentionally differ from the official files.
                 requiresDownload = needsPortRefresh || previousHash != entry.md5
             } else if portOwnedPaths.contains(entry.path) {
                 // ARM64 replacements intentionally differ from the official
@@ -173,6 +172,7 @@ final class MCGLInstaller {
             progress("Применение ARM64, оконных патчей и оптимизации эффектов…")
             try patchClient(in: temporaryURL)
         }
+        try adaptLWJGL(in: temporaryURL)
 
         try Data(portMarker.utf8).write(
             to: temporaryURL.appendingPathComponent(".arm64-port-version"),
@@ -181,7 +181,7 @@ final class MCGLInstaller {
         if profileExists {
             progress("Установка проверенных обновлений MCGL…")
             try applyStagedFiles(from: temporaryURL, to: gameDirectoryURL)
-            if needsPortRefresh {
+            if needsPortRefresh && Self.needsAlphaSortMigration(installedMarker: installedMarker) {
                 if try enableTransparentSortingIfPresent() {
                     progress("Сортировка прозрачных блоков включена для корректной графики.")
                 }
@@ -215,6 +215,14 @@ final class MCGLInstaller {
             }
         }
         return (lines.joined(separator: "\n"), changed)
+    }
+
+    static func needsAlphaSortMigration(installedMarker: String?) -> Bool {
+        // 1.6.5–1.6.8 already performed this preference migration. Updating
+        // bindings must not change a user's later rendering preference.
+        guard let marker = installedMarker else { return true }
+        return marker != "Minecraft Galaxy ARM64 bootstrap 1.6.5\n" &&
+            !marker.hasPrefix("Minecraft Galaxy ARM64 bootstrap lwjgl3-")
     }
 
     private func enableTransparentSortingIfPresent() throws -> Bool {
@@ -632,6 +640,54 @@ final class MCGLInstaller {
             ])
         try fileManager.removeItem(at: gameJar)
         try fileManager.moveItem(at: optimizedJar, to: gameJar)
+    }
+
+    private func adaptLWJGL(in gameRoot: URL) throws {
+        let asmJar = patchToolsURL.appendingPathComponent("asm-debug-all.jar")
+        for tool in ["PatchMCGLLwjgl3.class", "LWJGL3LinkageAudit.class", "PatchMCGLRenderer.class", "PatchMCGLChunks.class", "PatchMCGLGame.class", "render-commands.txt"] {
+            guard fileManager.fileExists(atPath: patchToolsURL.appendingPathComponent(tool).path) else {
+                throw installerError("не найден инструмент совместимости LWJGL3: \(tool)")
+            }
+        }
+        let toolClasspath = patchToolsURL.path + ":" + asmJar.path
+        let bindingClasspath = toolClasspath + ":" +
+            gameRoot.appendingPathComponent("bin/lwjgl.jar").path
+        for name in ["mcgl", "lwjgl_util"] {
+            let input = gameRoot.appendingPathComponent("bin/\(name).jar")
+            guard fileManager.fileExists(atPath: input.path) else { continue }
+            let output = gameRoot.appendingPathComponent("bin/\(name).lwjgl3.jar")
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-cp", toolClasspath, "PatchMCGLLwjgl3", input.path, output.path
+            ])
+            let rendered = gameRoot.appendingPathComponent("bin/\(name).renderer.jar")
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-cp", toolClasspath, "PatchMCGLRenderer", output.path, rendered.path,
+                patchToolsURL.appendingPathComponent("render-commands.txt").path
+            ])
+            var adapted = rendered
+            if name == "mcgl" {
+                let chunks = gameRoot.appendingPathComponent("bin/\(name).chunks.jar")
+                _ = try runProcess(executable: javaExecutableURL, arguments: [
+                    "-cp", toolClasspath, "PatchMCGLChunks", rendered.path, chunks.path
+                ])
+                adapted = chunks
+            }
+            let game = gameRoot.appendingPathComponent("bin/\(name).game-core.jar")
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-cp", toolClasspath, "PatchMCGLGame", adapted.path, game.path,
+                patchToolsURL.appendingPathComponent("render-commands.txt").path,
+                "--original-chunks"
+            ])
+            // Reject unknown binding signatures before applying staged files.
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-cp", bindingClasspath, "LWJGL3LinkageAudit", game.path
+            ])
+            try fileManager.removeItem(at: input)
+            try fileManager.removeItem(at: output)
+            if adapted != rendered { try fileManager.removeItem(at: rendered) }
+            try fileManager.removeItem(at: adapted)
+            try fileManager.moveItem(at: game, to: input)
+        }
     }
 
     @discardableResult

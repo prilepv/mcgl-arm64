@@ -1,0 +1,54 @@
+diff --git a/src/cocoa_window.m b/src/cocoa_window.m
+index 6104980..0ea8a2b 100644
+--- a/src/cocoa_window.m
++++ b/src/cocoa_window.m
+@@ -114,6 +114,17 @@ static void updateCursorMode(_GLFWwindow* window)
+ 
+ // Make the specified window and its video mode active on its monitor
+ //
++// MCGL renders on a separate owner thread. Cocoa may update the drawable
++// asynchronously (including a live-resize tracking loop), outside glfwPollEvents.
++// Pair this with the render owner's CGL context lock.
++static void mcglUpdateContext(_GLFWwindow* window)
++{
++    CGLContextObj context = [window->context.nsgl.object CGLContextObj];
++    CGLLockContext(context);
++    [window->context.nsgl.object update];
++    CGLUnlockContext(context);
++}
++
+ static void acquireMonitor(_GLFWwindow* window)
+ {
+     _glfwSetVideoModeCocoa(window->monitor, &window->videoMode);
+@@ -232,7 +243,7 @@ - (BOOL)windowShouldClose:(id)sender
+ - (void)windowDidResize:(NSNotification *)notification
+ {
+     if (window->context.source == GLFW_NATIVE_CONTEXT_API)
+-        [window->context.nsgl.object update];
++        mcglUpdateContext(window);
+ 
+     if (_glfw.ns.disabledCursorWindow == window)
+         _glfwCenterCursorInContentArea(window);
+@@ -267,7 +278,7 @@ - (void)windowDidResize:(NSNotification *)notification
+ - (void)windowDidMove:(NSNotification *)notification
+ {
+     if (window->context.source == GLFW_NATIVE_CONTEXT_API)
+-        [window->context.nsgl.object update];
++        mcglUpdateContext(window);
+ 
+     if (_glfw.ns.disabledCursorWindow == window)
+         _glfwCenterCursorInContentArea(window);
+@@ -387,7 +398,7 @@ - (BOOL)wantsUpdateLayer
+ - (void)updateLayer
+ {
+     if (window->context.source == GLFW_NATIVE_CONTEXT_API)
+-        [window->context.nsgl.object update];
++        mcglUpdateContext(window);
+ 
+     _glfwInputWindowDamage(window);
+ }
+@@ -2088,4 +2099,3 @@ GLFWAPI id glfwGetCocoaView(GLFWwindow* handle)
+ }
+ 
+ #endif // _GLFW_COCOA
+-

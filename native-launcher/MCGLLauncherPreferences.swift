@@ -13,6 +13,11 @@ final class MCGLLauncherPreferences {
 
     var remembersLogin: Bool { defaults.bool(forKey: "MCGLRememberLogin") }
 
+    var lastReadChangelogVersion: String? {
+        get { defaults.string(forKey: "MCGLLastReadChangelogVersion") }
+        set { defaults.set(newValue, forKey: "MCGLLastReadChangelogVersion") }
+    }
+
     var localPasswordNoticeAccepted: Bool {
         get { defaults.bool(forKey: "MCGLLocalPasswordNoticeAccepted") }
         set { defaults.set(newValue, forKey: "MCGLLocalPasswordNoticeAccepted") }

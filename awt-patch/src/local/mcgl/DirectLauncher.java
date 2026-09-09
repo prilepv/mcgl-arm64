@@ -11,14 +11,14 @@ import java.awt.Toolkit;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.net.URL;
 
 import net.mcgl.MCGLClassLoader;
 
 /**
- * Starts the MCGL game loop on Java's first thread and lets LWJGL create its
- * own Cocoa window.  The original launcher embeds LWJGL into an AWT Canvas;
+ * Starts the MCGL game loop on the runtime's dedicated Java thread. GLFW
+ * window/input operations are marshalled to the macOS first thread.
+ * The original launcher embeds LWJGL into an AWT Canvas;
  * that produces a permanently black CALayer on current macOS versions.
  */
 public final class DirectLauncher {
@@ -41,9 +41,9 @@ public final class DirectLauncher {
             System.exit(3);
         }
 
-        Thread.currentThread().setName("MCGL direct Cocoa thread");
+        Thread.currentThread().setName("MCGL game thread");
         prepareHeadlessAppletShell();
-        System.out.println("Direct Cocoa mode: creating MCGL Applet without an AWT window.");
+        System.out.println("Direct GLFW mode: creating MCGL Applet without an AWT window.");
 
         MCGLClassLoader loader = new MCGLClassLoader("mcgl.jar");
         Applet applet = createPeerlessApplet(loader);
@@ -57,17 +57,20 @@ public final class DirectLauncher {
 
         Runnable minecraft = findMinecraftRunnable(applet);
         createStandaloneDisplay(applet.getClass().getClassLoader());
-        startDisplayMonitor(applet.getClass().getClassLoader());
-        requestJavaForeground("after direct LWJGL window creation");
-        System.out.println("Direct Cocoa mode: starting the game loop on the first JVM thread.");
-        minecraft.run();
-        System.out.println("Direct Cocoa mode: game loop finished.");
+        System.out.println("Direct GLFW mode: starting the game loop on the dedicated Java thread.");
+        try {
+            minecraft.run();
+        } finally {
+            Class.forName("org.lwjgl.opengl.Display", true, applet.getClass().getClassLoader())
+                    .getMethod("shutdown").invoke(null);
+        }
+        System.out.println("Direct GLFW mode: game loop finished.");
     }
 
     /**
      * The Applet hierarchy is used only as a logical container.  Loading the
-     * native Java 8 Cocoa toolkit corrupts the application menu on macOS 15,
-     * while LWJGL creates and owns the real NSWindow itself.  Initialize the
+     * native Cocoa toolkit has corrupted the application menu on macOS 15,
+     * while the platform backend owns the real window. Initialize the
      * safe headless toolkit, then permit construction of the peerless Applet.
      */
     private static void prepareHeadlessAppletShell() throws Exception {
@@ -98,17 +101,6 @@ public final class DirectLauncher {
     }
 
     private static void createStandaloneDisplay(ClassLoader gameLoader) throws Exception {
-        // The normal AWT toolkit creates NSApplication as a side effect.  Our
-        // peerless Applet deliberately uses HeadlessToolkit, so initialize
-        // AppKit explicitly on the JVM/main thread before asking macOS for an
-        // NSOpenGLPixelFormat.  Without this, Apple Silicon returns nil even
-        // for a valid legacy OpenGL 2.1 format.
-        int preexistingWindows = CocoaWindowBridge.activateAndRaise();
-        if (preexistingWindows < 0)
-            throw new IllegalStateException("Cocoa bridge was not called on the JVM main thread.");
-        System.out.println("Cocoa application initialized before OpenGL; existing windows: " +
-                preexistingWindows + ".");
-
         Class<?> displayModeClass = Class.forName("org.lwjgl.opengl.DisplayMode", true, gameLoader);
         Object displayMode = displayModeClass.getConstructor(Integer.TYPE, Integer.TYPE)
                 .newInstance(Integer.valueOf(WIDTH), Integer.valueOf(HEIGHT));
@@ -118,6 +110,7 @@ public final class DirectLauncher {
         displayClass.getMethod("setLocation", Integer.TYPE, Integer.TYPE)
                 .invoke(null, Integer.valueOf(80), Integer.valueOf(80));
         displayClass.getMethod("setTitle", String.class).invoke(null, "Minecraft Galaxy");
+        displayClass.getMethod("setResizable", Boolean.TYPE).invoke(null, Boolean.TRUE);
 
         Class<?> pixelFormatClass = Class.forName("org.lwjgl.opengl.PixelFormat", true, gameLoader);
         Object pixelFormat = pixelFormatClass.getConstructor().newInstance();
@@ -125,59 +118,12 @@ public final class DirectLauncher {
                 .invoke(pixelFormat, Integer.valueOf(24));
         pixelFormat = pixelFormatClass.getMethod("withStencilBits", Integer.TYPE)
                 .invoke(pixelFormat, Integer.valueOf(8));
-        displayClass.getMethod("create", pixelFormatClass).invoke(null, pixelFormat);
+        Class<?> coreDisplayClass = Class.forName("org.lwjgl.opengl.MCGLCoreDisplay", true, gameLoader);
+        coreDisplayClass.getMethod("create", pixelFormatClass).invoke(null, pixelFormat);
 
-        int raised = CocoaWindowBridge.activateAndRaise();
-        if (raised < 1)
-            throw new IllegalStateException("Cocoa bridge found no visible LWJGL window (result " + raised + ").");
-        System.out.println("Direct Cocoa bridge raised " + raised + " window(s) on the JVM main thread.");
-    }
-
-    private static void requestJavaForeground(String stage) {
-        try {
-            Class<?> applicationClass = Class.forName("com.apple.eawt.Application");
-            Object application = applicationClass.getMethod("getApplication").invoke(null);
-            applicationClass.getMethod("requestForeground", Boolean.TYPE)
-                    .invoke(application, Boolean.TRUE);
-            System.out.println("Java macOS foreground requested " + stage + ".");
-        } catch (Throwable error) {
-            System.err.println("Java macOS foreground request failed " + stage + ": " + error);
-        }
-    }
-
-    private static void startDisplayMonitor(final ClassLoader gameLoader) {
-        Thread monitor = new Thread(new Runnable() {
-            public void run() {
-                try {
-                    Thread.sleep(2500L);
-                    Class<?> display = Class.forName("org.lwjgl.opengl.Display", true, gameLoader);
-                    Method isCreated = display.getMethod("isCreated");
-                    for (int attempt = 0; attempt < 20; attempt++) {
-                        if (((Boolean)isCreated.invoke(null)).booleanValue()) {
-                            requestJavaForeground("after LWJGL window creation");
-                            display.getMethod("setLocation", Integer.TYPE, Integer.TYPE)
-                                    .invoke(null, Integer.valueOf(80), Integer.valueOf(80));
-                            boolean visible = ((Boolean)display.getMethod("isVisible").invoke(null)).booleanValue();
-                            boolean active = ((Boolean)display.getMethod("isActive").invoke(null)).booleanValue();
-                            int width = ((Integer)display.getMethod("getWidth").invoke(null)).intValue();
-                            int height = ((Integer)display.getMethod("getHeight").invoke(null)).intValue();
-                            int x = ((Integer)display.getMethod("getX").invoke(null)).intValue();
-                            int y = ((Integer)display.getMethod("getY").invoke(null)).intValue();
-                            System.out.println("LWJGL window: created=true visible=" + visible +
-                                    " active=" + active + " bounds=" + width + "x" + height +
-                                    "+" + x + "+" + y);
-                            return;
-                        }
-                        Thread.sleep(500L);
-                    }
-                    System.err.println("LWJGL window monitor: Display was not created within 12 seconds.");
-                } catch (Throwable error) {
-                    System.err.println("LWJGL window monitor failed: " + error);
-                }
-            }
-        }, "MCGL LWJGL window monitor");
-        monitor.setDaemon(true);
-        monitor.start();
+        System.out.println("GLFW Core 4.1 game window ready: " + displayClass.getMethod("getWidth").invoke(null)
+                + "x" + displayClass.getMethod("getHeight").invoke(null)
+                + " visible=" + displayClass.getMethod("isVisible").invoke(null));
     }
 
     private static Runnable findMinecraftRunnable(Applet applet) throws Exception {

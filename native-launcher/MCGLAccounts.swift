@@ -214,7 +214,7 @@ final class MCGLAccountService: MCGLAccountFetching {
         // Protocol version used by the official Windows 2.13 launcher, not ours.
         components.queryItems = [URLQueryItem(name: "v", value: "2.13"), URLQueryItem(name: "user", value: nickname)]
         var request = URLRequest(url: components.url!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
-        request.setValue("MCGL-ARM64-Launcher/1.6.7", forHTTPHeaderField: "User-Agent")
+        request.setValue("MCGL-ARM64-Launcher/1.6.16", forHTTPHeaderField: "User-Agent")
         request.setValue("text/html", forHTTPHeaderField: "Accept")
         request.httpShouldHandleCookies = false
         return request

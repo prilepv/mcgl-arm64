@@ -19,8 +19,8 @@ struct InstallerHarness {
             gameDirectoryURL: destination.appendingPathComponent("mclient-arm64", isDirectory: true),
             portSupportURL: resources?.appendingPathComponent("PortSupport") ?? analysis.appendingPathComponent("bootstrap-build/PortSupport", isDirectory: true),
             patchToolsURL: resources?.appendingPathComponent("PatchTools") ?? analysis.appendingPathComponent("bootstrap-build/PatchTools", isDirectory: true),
-            javaExecutableURL: resources?.appendingPathComponent("java8-arm64/Home/bin/java") ?? analysis.appendingPathComponent("zulu8-arm64/Contents/Home/bin/java"),
-            jarExecutableURL: resources?.appendingPathComponent("java8-arm64/Home/bin/jar") ?? analysis.appendingPathComponent("zulu8-arm64/Contents/Home/bin/jar"))
+            javaExecutableURL: resources?.appendingPathComponent("java21-arm64/Home/bin/java") ?? analysis.appendingPathComponent("zulu21-arm64/Contents/Home/bin/java"),
+            jarExecutableURL: resources?.appendingPathComponent("java21-arm64/Home/bin/jar") ?? analysis.appendingPathComponent("zulu21-arm64/Contents/Home/bin/jar"))
 
         var finished = false
         var exitCode: Int32 = 1

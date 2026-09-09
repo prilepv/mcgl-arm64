@@ -145,6 +145,7 @@ final class LauncherBackgroundView: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
     private let preferences: MCGLLauncherPreferences
     private let resourcesOverride: URL?
+    private let supportRootOverride: URL?
     private let updater = MCGLLauncherUpdater()
     private let accounts: MCGLAccountStore
     private let accountService: MCGLAccountFetching
@@ -152,10 +153,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     init(preferences: MCGLLauncherPreferences = MCGLLauncherPreferences(),
          resourcesRoot: URL? = nil,
+         supportRoot: URL? = nil,
          accountService: MCGLAccountFetching = MCGLAccountService(),
          passwordStore: MCGLPasswordStore = MCGLPasswordStore()) {
         self.preferences = preferences
         self.resourcesOverride = resourcesRoot
+        self.supportRootOverride = supportRoot
         self.accounts = MCGLAccountStore(preferences: preferences)
         self.accountService = accountService
         self.passwordStore = passwordStore
@@ -173,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private lazy var patchToolsURL = resourcesRoot
         .appendingPathComponent("PatchTools", isDirectory: true)
     private lazy var supportRootURL: URL = {
+        if let supportRootOverride { return supportRootOverride }
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask).first!
         return base.appendingPathComponent("Minecraft Galaxy ARM64", isDirectory: true)
@@ -181,15 +185,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         .appendingPathComponent("mclient-arm64", isDirectory: true)
     private lazy var gameDirectory = gameDirectoryURL.path
     private lazy var javaVMPath = resourcesRoot
-        .appendingPathComponent("java8-arm64", isDirectory: true)
-        .appendingPathComponent("Home/jre/lib/server/libjvm.dylib").path
+        .appendingPathComponent("java21-arm64", isDirectory: true)
+        .appendingPathComponent("Home/lib/server/libjvm.dylib").path
     private lazy var javaExecutableURL = resourcesRoot
-        .appendingPathComponent("java8-arm64/Home/bin/java")
+        .appendingPathComponent("java21-arm64/Home/bin/java")
     private lazy var jarExecutableURL = resourcesRoot
-        .appendingPathComponent("java8-arm64/Home/bin/jar")
+        .appendingPathComponent("java21-arm64/Home/bin/jar")
     private lazy var gameRuntimePath = resourcesRoot
         .appendingPathComponent("MCGL ARM64 Runtime.app", isDirectory: true).path
     private lazy var logPath: String = {
+        if let supportRootOverride {
+            let directory = supportRootOverride.appendingPathComponent("Logs", isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            return directory.appendingPathComponent("launcher.log").path
+        }
         let base = FileManager.default.urls(for: .libraryDirectory,
                                             in: .userDomainMask).first!
         let directory = base
@@ -296,8 +305,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             attributes: [.kern: 2, .font: brandDetail.font!, .foregroundColor: GalaxyTheme.muted])
         let navigationTitle = label("ЛАУНЧЕР", size: 10, weight: .semibold, color: GalaxyTheme.muted)
 
-        let titles = ["Играть", "Аккаунты", "Настройки", "Журнал"]
-        let symbols = ["play.fill", "person.2.fill", "slider.horizontal.3", "text.alignleft"]
+        let unreadChanges = preferences.lastReadChangelogVersion != MCGLLauncherUpdater.currentVersion
+        let titles = ["Играть", "Аккаунты", "Настройки", "Журнал", unreadChanges ? "Изменения •" : "Изменения"]
+        let symbols = ["play.fill", "person.2.fill", "slider.horizontal.3", "text.alignleft", "sparkles"]
         for index in 0..<titles.count {
             let button = actionButton(titles[index], symbol: symbols[index],
                                       action: #selector(selectPage(_:)), style: .navigation)
@@ -322,8 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         tabView = NSTabView()
         tabView.tabViewType = .noTabsNoBorder
         tabView.drawsBackground = false
-        for (index, view) in [makePlayTab(), makeAccountsTab(), makeSettingsTab(), makeLogTab()].enumerated() {
-            let item = NSTabViewItem(identifier: ["play", "accounts", "settings", "log"][index])
+        for (index, view) in [makePlayTab(), makeAccountsTab(), makeSettingsTab(), makeLogTab(), makeChangelogTab()].enumerated() {
+            let item = NSTabViewItem(identifier: ["play", "accounts", "settings", "log", "changes"][index])
             item.label = titles[index]
             item.view = view
             tabView.addTabViewItem(item)
@@ -413,6 +423,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
         refreshLaunchButton()
         if index == 1 { accounts.accounts.forEach { queueAccountRefresh($0.id) } }
+        if index == 4 {
+            preferences.lastReadChangelogVersion = MCGLLauncherUpdater.currentVersion
+            navigationButtons[index].title = "Изменения"
+            navigationButtons[index].setAccessibilityLabel("Изменения")
+        }
     }
 
     private func refreshLaunchButton() {
@@ -940,11 +955,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         graphicsDiagnosticsButton.identifier = NSUserInterfaceItemIdentifier("graphicsDiagnostics")
         graphicsDiagnosticsButton.state = preferences.graphicsDiagnostics ? .on : .off
         graphicsDiagnosticsButton.toolTip = "Техническая статистика каждые 5 секунд. Для обычной игры не требуется."
-        chunkVboButton = NSButton(checkboxWithTitle: "Ускоренная отрисовка чанков · VBO / VAO",
+        chunkVboButton = NSButton(checkboxWithTitle: "Core-отрисовка чанков · VBO / VAO (всегда включена)",
                                   target: self, action: #selector(performanceOptionsChanged))
         chunkVboButton.identifier = NSUserInterfaceItemIdentifier("chunkVbo")
-        chunkVboButton.state = preferences.chunkVbo ? .on : .off
-        chunkVboButton.toolTip = "Ускоренная передача геометрии с сохранением запасного пути отрисовки."
+        chunkVboButton.state = .on
+        chunkVboButton.isEnabled = false
+        chunkVboButton.toolTip = "В этой тестовой версии игра использует Core 4.1. Прежний переключатель VBO больше не меняет способ отрисовки."
         for button in [multicoreButton!, graphicsDiagnosticsButton!, chunkVboButton!] {
             styleCheckbox(button)
         }
@@ -1028,6 +1044,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             scrollView.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -24)
         ])
         return card
+    }
+
+    private func makeChangelogTab() -> NSView {
+        let page = NSView()
+        let heading = label("Что изменилось", size: 28, weight: .bold)
+        let caption = note("Коротко о главном. История доступна без интернета.")
+        let scroll = NSScrollView()
+        scroll.identifier = NSUserInterfaceItemIdentifier("changelog-scroll")
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.contentView = VerticalLogClipView()
+        scroll.contentView.drawsBackground = false
+        let document = MCGLAccountsDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = document
+        let cards = MCGLChangelog.entries.enumerated().map { index, entry in
+            makeChangelogCard(entry, index: index)
+        }
+        let list = verticalStack(cards, spacing: 14)
+        add([list], to: document)
+        add([heading, caption, scroll], to: page)
+        NSLayoutConstraint.activate([
+            heading.topAnchor.constraint(equalTo: page.topAnchor, constant: 4),
+            heading.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            caption.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 6),
+            caption.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            caption.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 20),
+            scroll.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: page.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            list.topAnchor.constraint(equalTo: document.topAnchor, constant: 2),
+            list.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -12),
+            list.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -2)
+        ])
+        for card in cards { card.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true }
+        return page
+    }
+
+    private func makeChangelogCard(_ entry: MCGLChangelogEntry, index: Int) -> NSView {
+        let card = makeCardView()
+        card.identifier = NSUserInterfaceItemIdentifier("changelog-\(entry.version)")
+        let installed = entry.version == MCGLLauncherUpdater.currentVersion
+        if installed { card.layer?.borderColor = GalaxyTheme.cyan.withAlphaComponent(0.45).cgColor }
+        let version = label(entry.version, size: 22, weight: .bold,
+                            color: installed ? GalaxyTheme.cyan : .white)
+        let date = label(entry.date, size: 11, color: GalaxyTheme.muted)
+        let title = sectionLabel(entry.title)
+        let status = label(installed ? "УСТАНОВЛЕНА" : "ПРЕДЫДУЩИЙ РЕЛИЗ", size: 10,
+                           weight: .semibold, color: installed ? GalaxyTheme.cyan : GalaxyTheme.muted)
+        status.identifier = NSUserInterfaceItemIdentifier("changelog-status-\(entry.version)")
+        let body = NSTextField(wrappingLabelWithString: entry.points.map { "•  " + $0 }.joined(separator: "\n"))
+        body.font = .systemFont(ofSize: 13)
+        body.textColor = .white
+        body.isSelectable = true
+        body.identifier = NSUserInterfaceItemIdentifier("changelog-body-\(entry.version)")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacing = 8
+        paragraph.lineSpacing = 2
+        body.attributedStringValue = NSAttributedString(string: body.stringValue, attributes: [
+            .font: body.font!, .foregroundColor: NSColor.white, .paragraphStyle: paragraph
+        ])
+        body.setContentCompressionResistancePriority(.required, for: .vertical)
+        let details = actionButton("Подробнее на GitHub", symbol: "arrow.up.right",
+                                   action: #selector(openChangelogRelease(_:)))
+        details.tag = index
+        details.identifier = NSUserInterfaceItemIdentifier("changelog-link-\(entry.version)")
+        details.toolTip = entry.releaseURL.absoluteString
+        add([version, date, title, status, body, details], to: card)
+        NSLayoutConstraint.activate([
+            version.topAnchor.constraint(equalTo: card.topAnchor, constant: 20),
+            version.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 22),
+            date.leadingAnchor.constraint(equalTo: version.trailingAnchor, constant: 12),
+            date.firstBaselineAnchor.constraint(equalTo: version.firstBaselineAnchor),
+            status.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -22),
+            status.centerYAnchor.constraint(equalTo: version.centerYAnchor),
+            date.trailingAnchor.constraint(lessThanOrEqualTo: status.leadingAnchor, constant: -12),
+            title.topAnchor.constraint(equalTo: version.bottomAnchor, constant: 10),
+            title.leadingAnchor.constraint(equalTo: version.leadingAnchor),
+            title.trailingAnchor.constraint(equalTo: status.trailingAnchor),
+            body.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 12),
+            body.leadingAnchor.constraint(equalTo: version.leadingAnchor),
+            body.trailingAnchor.constraint(equalTo: status.trailingAnchor),
+            details.topAnchor.constraint(equalTo: body.bottomAnchor, constant: 14),
+            details.leadingAnchor.constraint(equalTo: version.leadingAnchor),
+            details.heightAnchor.constraint(equalToConstant: 32),
+            details.widthAnchor.constraint(equalToConstant: 190),
+            details.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18)
+        ])
+        return card
+    }
+
+    @objc private func openChangelogRelease(_ sender: NSButton) {
+        guard MCGLChangelog.entries.indices.contains(sender.tag) else { return }
+        NSWorkspace.shared.open(MCGLChangelog.entries[sender.tag].releaseURL)
     }
 
     private func add(_ views: [NSView], to parent: NSView) {
@@ -1160,7 +1275,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     @objc private func performanceOptionsChanged() {
         preferences.multicoreMemory = multicoreButton.state == .on
         preferences.graphicsDiagnostics = graphicsDiagnosticsButton.state == .on
-        preferences.chunkVbo = chunkVboButton.state == .on
     }
 
     @objc private func clearVisibleLog() {
@@ -1287,7 +1401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: javaVMPath) else {
-            showError("Не найдена подготовленная ARM64 Java 8.")
+            showError("Не найдена подготовленная ARM64 Java 21.")
             return
         }
 
@@ -1383,7 +1497,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let fpsLimit = preferences.fpsLimit
         preferences.multicoreMemory = multicoreEnabled
         preferences.graphicsDiagnostics = graphicsDiagnosticsEnabled
-        preferences.chunkVbo = chunkVboButton.state == .on
         var runtimeEnvironment = ProcessInfo.processInfo.environment
         runtimeEnvironment["MCGL_INITIAL_MEMORY_MB"] = String(initialMemoryMB)
         runtimeEnvironment["MCGL_MEMORY_MB"] = String(maximumMemoryMB)
@@ -1391,7 +1504,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         runtimeEnvironment["MCGL_MULTICORE_MEMORY"] = multicoreEnabled ? "1" : "0"
         runtimeEnvironment["MCGL_GRAPHICS_DIAGNOSTICS"] = graphicsDiagnosticsEnabled ? "1" : "0"
         runtimeEnvironment["MCGL_FPS_LIMIT"] = String(fpsLimit)
-        runtimeEnvironment["MCGL_CHUNK_VBO"] = preferences.chunkVbo ? "1" : "0"
         configuration.environment = runtimeEnvironment
         configuration.activates = true
         configuration.createsNewApplicationInstance = true
@@ -1411,9 +1523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         appendLog(graphicsDiagnosticsEnabled
             ? "Диагностика графики включена: статистика кадра будет выводиться каждые 5 секунд."
             : "Диагностика графики выключена.")
-        appendLog(preferences.chunkVbo
-            ? "VBO-отрисовка включена: ускорение VAO включится при поддержке драйвером; запасные пути сохранены."
-            : "Используется прежняя отрисовка чанков (VBO выключен).")
+        appendLog("Core 4.1: исходный порядок чанков, пакетная отправка геометрии и текста, шейдеры и VBO / VAO; без общей сортировки граней.")
 
         NSWorkspace.shared.openApplication(
             at: URL(fileURLWithPath: gameRuntimePath),
@@ -1574,7 +1684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         maximumMemoryPopUp.isEnabled = true
         multicoreButton.isEnabled = true
         graphicsDiagnosticsButton.isEnabled = true
-        chunkVboButton.isEnabled = true
+        chunkVboButton.isEnabled = false
         fpsPopUp.isEnabled = true
     }
 

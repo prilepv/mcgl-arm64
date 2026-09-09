@@ -2,6 +2,8 @@
 ._*
 *.log
 *.hprof
+*.jfr
+*.sample.txt
 hs_err_pid*
 *.class
 *.jar
@@ -38,3 +40,7 @@ Credentials/
 *.bbcode
 *.bbcode.*
 FORUM-POST-*
+/forum-local.*/
+/diagnostics-local/
+/release-local.*/
+/AGENTS.md
