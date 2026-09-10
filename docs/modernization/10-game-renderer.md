@@ -535,3 +535,45 @@ for reference/regression until milestone 11. CPU chunk workers and completion of
 the final buffer-streaming/performance milestone are not claimed here. Component fixtures
 do not establish visual equivalence for every block, entity, effect or server
 scene; an authenticated world remains a separate acceptance check.
+
+## Lit sign text (build 189, retained in 1.7.1)
+
+The existing ordered text path excluded all fixed-function lighting. Cached
+font glyphs used by signs consequently fell back to one ordinary mesh draw per
+character. Declared cached glyphs now also batch under ordinary lighting; custom
+effects, unrelated compiled models and lit immediate geometry retain their
+previous paths. No sign strings, font metrics, glyph order, visibility or game
+algorithms are changed.
+
+Lit text uses a separate 172-byte vertex layout, retaining the existing
+124-byte unlit layout. Each glyph carries its original float model-view and
+inverse-transpose normal matrices, inherited normal, color and lightmap inputs.
+Lighting arithmetic is shared with the ordinary material shader, not approximated
+on the CPU. Material/light/raster/texture changes remain ordered barriers. Both
+layouts share the existing bounded 8 MiB text stream cache and 512-glyph run
+limit; no new native calls or unbounded caches are introduced.
+
+The expanded `GameTextProbe` checks exact RGBA against standalone glyph draws,
+including directional/point lights, flat/smooth shading, normalization, color
+material modes, nonuniform/reflected/singular transforms, per-glyph normals,
+lightmap/fog, custom-effect fallback and actual original cached string wrappers.
+The account-free 16-sign fixture (four lines of 16 glyphs per sign) produced:
+
+| Path | Draws per fixture frame | Median wall time, two context lifetimes |
+| --- | ---: | ---: |
+| Standalone lit glyphs | 1,024 | 3.14–3.70 ms |
+| Ordered lit glyph runs | 64 | 0.865–0.869 ms |
+
+Both paths produced identical pixels, and warmed runs created no additional
+GPU meshes. These synthetic times include `glFinish`; they are not measured
+server-world FPS or an authenticated acceptance result. The full game GPU probe
+passed 1,602 assertions; material/effect checks passed 76 GPU assertions over two
+contexts and all 15 original effects. The 160 packaged renderer entries match
+the tested source output. Weather regression checks still pass 118,672 assertions.
+
+The candidate uses installer marker `lwjgl3-game-original-core-7`. An isolated
+188-to-189 refresh installed the new renderer without changing graphics options;
+a repeat required no updates. Release 1.7.1 retains this renderer with refreshed
+release metadata and installer marker `lwjgl3-game-original-core-9`. The later
+experimental compiled-model merging path is not included. No server-world FPS
+improvement is claimed for this maintenance release.

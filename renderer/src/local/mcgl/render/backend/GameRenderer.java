@@ -108,7 +108,7 @@ public class GameRenderer {
         Draw fallback;
         Glyph(int[] raw){for(int v=0;v<4;v++)for(int i=0;i<5;i++)positionsAndUvs[v*5+i]=Float.intBitsToFloat(raw[v*8+i]);}
         public void draw(){
-            if(textEligible()){text().glyph(positionsAndUvs);return;}
+            if(textScopeEligible()){text().glyph(positionsAndUvs);return;}
             flushText();
             if(fallback==null){int[] raw=new int[32];for(int v=0;v<4;v++)for(int i=0;i<5;i++)raw[v*8+i]=Float.floatToRawIntBits(positionsAndUvs[v*5+i]);fallback=new Draw(GameGeometry.raw(raw,32,4,7,false,true,false,true,false,false),MeshPipeline.Usage.STATIC);}
             fallback.draw();
@@ -144,7 +144,9 @@ public class GameRenderer {
     private void flushTerrain(){if(terrainBatch!=null)terrainBatch.flush();}
     private boolean pendingTerrain(){return terrainBatch!=null&&terrainBatch.pending();}
     private GameTerrainBatch terrainBatch(){if(terrainBatch==null)terrainBatch=new GameTerrainBatch(this,context);return terrainBatch;}
-    private boolean textEligible(){return textDepth>0&&compiling==null&&effect==null&&!state.enabled(2896);}
+    private boolean textScopeEligible(){return textDepth>0&&compiling==null&&effect==null;}
+    // Immediate lit geometry can vary its normal within a quad; it keeps the ordinary path.
+    private boolean textEligible(){return textScopeEligible()&&!state.enabled(2896);}
     private GameTextBatch text(){if(text==null)text=new GameTextBatch(this,context);return text;}
     void drawText(Mesh mesh,int count,ShaderProgram program) {
         state.bind(program,0);program.bind();boundProgram=program;raster.beginSamplers();

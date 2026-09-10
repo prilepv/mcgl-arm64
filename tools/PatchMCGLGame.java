@@ -12,7 +12,7 @@ public final class PatchMCGLGame implements Opcodes {
     private static final String RAW="([IIIIZZZZZZ)I";
     private final SortedMap<String,RenderCommandSpec> manifest;
     private final boolean originalChunks;
-    private int calls,windows,effects,accumulators,chunks,worlds,fonts;
+    private int calls,windows,effects,accumulators,chunks,worlds,fonts,weather;
     private PatchMCGLGame(Path manifest,boolean originalChunks)throws IOException{this.manifest=RenderCommandSpec.read(manifest);this.originalChunks=originalChunks;}
     public static void main(String[] args)throws Exception {
         if(args.length!=3&&(args.length!=4||!args[3].equals("--original-chunks")))throw new IllegalArgumentException("post-chunk-client-or-rendered-utility.jar NEW-output.jar render-commands.txt [--original-chunks]");
@@ -36,6 +36,7 @@ public final class PatchMCGLGame implements Opcodes {
                 // private implementation untouched until the separate legacy-cleanup milestone.
                 if(node.name.startsWith("local/mcgl/perf/ChunkVbo")){retained++;continue;}
                 if(node.name.equals("net/A/U/LA")){patch.effect(node);special=true;}
+                if(node.name.equals("net/A/U/oooO")){patch.weather(node);special=true;}
                 if(node.name.equals(tess)){patch.accumulator(node);special=true;}
                 if(node.name.equals("net/A/U/H")){patch.chunk(node,tess);special=true;}
                 if(node.name.matches("net/A/U/Ooo0O{100,}")){patch.world(node);special=true;}
@@ -63,7 +64,7 @@ public final class PatchMCGLGame implements Opcodes {
                 }
                 if(special||patch.calls!=before){ClassWriter writer=new ClassWriter(ClassWriter.COMPUTE_MAXS);node.accept(writer);changed.put(entry.getName(),writer.toByteArray());}else retained++;
             }
-            require(!client||patch.windows==1&&patch.effects==1&&patch.accumulators==1&&patch.chunks==1&&patch.worlds==1&&patch.fonts==2,"Incomplete Core game wiring");
+            require(!client||patch.windows==1&&patch.effects==1&&patch.accumulators==1&&patch.chunks==1&&patch.worlds==1&&patch.fonts==2&&patch.weather==1,"Incomplete Core game wiring");
             require(patch.calls>0,"No game render calls found");
             Path temporary=Files.createTempFile(output.getParent(),".mcgl-game-",".jar");
             try {
@@ -74,9 +75,10 @@ public final class PatchMCGLGame implements Opcodes {
                     }write(result,"META-INF/mcgl/game-core-v1","Core41/game-passes-v1\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     write(result,"META-INF/mcgl/chunk-policy",(patch.originalChunks?"original-cache\n":"global-face\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     write(result,"META-INF/mcgl/text-policy","ordered-glyphs-v1\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    if(client)write(result,"META-INF/mcgl/weather-policy","finite-center-v1\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 }Files.move(temporary,output);
             }finally{Files.deleteIfExists(temporary);}
-            System.out.println("GAME_ADAPTER_PASS classes="+changed.size()+" retained="+retained+" calls="+patch.calls+" windows="+patch.windows+" effects="+patch.effects+" accumulators="+patch.accumulators+" chunks="+patch.chunks+" worlds="+patch.worlds+" fonts="+patch.fonts+" chunk-policy="+(patch.originalChunks?"original-cache":"global-face"));
+            System.out.println("GAME_ADAPTER_PASS classes="+changed.size()+" retained="+retained+" calls="+patch.calls+" windows="+patch.windows+" effects="+patch.effects+" accumulators="+patch.accumulators+" chunks="+patch.chunks+" worlds="+patch.worlds+" fonts="+patch.fonts+" weather="+patch.weather+" chunk-policy="+(patch.originalChunks?"original-cache":"global-face"));
         }
     }
     private String owner(String owner,String name,String descriptor,boolean isStatic)throws IOException {
@@ -96,6 +98,24 @@ public final class PatchMCGLGame implements Opcodes {
     private MethodHandle handle(MethodHandle handle)throws IOException {
         String owner=owner(handle.getOwner(),handle.getName(),handle.getDesc(),handle.getTag()==MH_INVOKESTATIC);
         return owner.equals(handle.getOwner())?handle:new MethodHandle(handle.getTag(),owner,handle.getName(),handle.getDesc());
+    }
+    private void weather(ClassNode node)throws IOException {
+        MethodNode draw=method(node,"void","(F)V");
+        require(fingerprint(draw)==2466055191L,"Changed original rain/snow renderer");
+        int lengths=0;
+        for(AbstractInsnNode instruction:draw.instructions.toArray())if(instruction instanceof MethodInsnNode) {
+            MethodInsnNode call=(MethodInsnNode)instruction;
+            if(call.getOpcode()==INVOKESTATIC&&call.owner.equals("net/A/for/VB")&&call.name.equals("Ô00000")&&call.desc.equals("(F)F")) {
+                // The 32x32 weather directions use integer offsets from (16,16).
+                // Every nonzero length is >= 1, so this changes ONLY the center's
+                // 0/0: its zero-width quad becomes finite and stays degenerate.
+                // Keep the original rain/snow emission and all Core input guards.
+                InsnList guard=new InsnList();guard.add(new InsnNode(FCONST_1));
+                guard.add(new MethodInsnNode(INVOKESTATIC,"java/lang/Math","max","(FF)F"));
+                draw.instructions.insert(call,guard);lengths++;
+            }
+        }
+        require(lengths==1,"Changed weather direction initializer");weather++;
     }
     private void accumulator(ClassNode node)throws IOException {
         require(node.interfaces.contains("local/mcgl/render/ChunkTessellator"),"Stage 9 CPU sink is missing");

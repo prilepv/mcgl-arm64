@@ -61,10 +61,7 @@ public final class GameShaderSource {
     static String declarations(boolean vertex,boolean textureTables,boolean originalPalette) {
         String shared = "uniform mat4 uModelView, uProjection;\nuniform mat3 uNormalMatrix;\n"
                 + "struct GameFog { vec4 color; float start; float end; float density; };\nuniform GameFog uGameFog;\n"
-                + "struct GameLight { vec4 position; vec4 halfVector; vec4 ambient; vec4 diffuse; vec4 specular; };\n"
-                + "uniform GameLight uGameLight0, uGameLight1;\nstruct GameMaterial { vec4 ambient; vec4 diffuse; };\n"
-                + "uniform GameMaterial uGameMaterial;\nstruct GameLightModel { vec4 ambient; };\n"
-                + "uniform GameLightModel uGameLightModel;\n";
+                + lightingDeclarations();
         if (!vertex) return shared + (textureTables?textureDeclarations():"vec4 mcglTextureProj(sampler2D original,vec3 uv){return textureProj(original,uv);}\n") + "layout(location=0) out vec4 mcglOutColor;\n"
                 + "uniform int uAlphaFunction;\nuniform float uAlphaReference;\n"
                 + "bool mcglAlphaPass(float a) { float r = uAlphaReference;\n"
@@ -93,6 +90,13 @@ public final class GameShaderSource {
                 + "vec3 mcglVertexNormal() { return (mcglVertexMask() & 16) != 0 ? aNormal : uGameNormal; }\n"
                 + "vec2 mcglVertexUv() { return (mcglVertexMask() & 4) != 0 ? aTexCoord : uGameUv; }\n"
                 + "vec2 mcglVertexLightmap() { return (mcglVertexMask() & 8) != 0 ? aLightmap : uGameLightmap; }\n";
+    }
+    /** Shared material/light contract; text does not import terrain or line vertex attributes. */
+    static String lightingDeclarations() {
+        return "struct GameLight { vec4 position; vec4 halfVector; vec4 ambient; vec4 diffuse; vec4 specular; };\n"
+                + "uniform GameLight uGameLight0, uGameLight1;\nstruct GameMaterial { vec4 ambient; vec4 diffuse; };\n"
+                + "uniform GameMaterial uGameMaterial;\nstruct GameLightModel { vec4 ambient; };\n"
+                + "uniform GameLightModel uGameLightModel;\n";
     }
     /** Only the shipped, two-argument colorMap lookup can use a chunk's primary texture override.
      * Other sampler names, units, projective/bias calls and arbitrary sampler expressions retain their ordinary path. */

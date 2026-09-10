@@ -15,14 +15,20 @@ public final class GameMaterialProgram {
         return new ShaderSources("mcgl/game-material"+(textureTables?"-chunk-textures":""), source(true, "game.vert",textureTables), source(false, "game.frag",textureTables));
     }
     public static ShaderSources textSources() {
-        return new ShaderSources("mcgl/game-text", "#version 410 core\n"+resource("text.vert"), source(false,"game.frag",false));
+        return textSources(false);
+    }
+    /** Lit cached glyphs keep the ordinary material math, with each glyph's original normal matrix. */
+    public static ShaderSources textSources(boolean lighting) {
+        String inputs=lighting?"#define MCGL_TEXT_LIGHTING\n"+GameShaderSource.lightingDeclarations()+resource("lighting.glsl"):"";
+        return new ShaderSources("mcgl/game-text"+(lighting?"-lit":""), "#version 410 core\n"+inputs+resource("text.vert"), source(false,"game.frag",false));
     }
     /** Exact original per-draw float matrices; ordinary and imported effects stay unchanged. */
     public static ShaderSources originalBatchSources(){
-        return new ShaderSources("mcgl/game-original-batch","#version 410 core\n"+GameShaderSource.declarations(true,false,true)+"\n#line 1\n"+resource("game.vert"),source(false,"game.frag",false));
+        return new ShaderSources("mcgl/game-original-batch","#version 410 core\n"+GameShaderSource.declarations(true,false,true)+resource("lighting.glsl")+"\n#line 1\n"+resource("game.vert"),source(false,"game.frag",false));
     }
     private static String source(boolean vertex, String name,boolean textureTables) {
-        return "#version 410 core\n" + GameShaderSource.declarations(vertex,textureTables) + "\n#line 1\n" + resource(name);
+        return "#version 410 core\n" + GameShaderSource.declarations(vertex,textureTables)
+                + (vertex?resource("lighting.glsl"):"") + "\n#line 1\n" + resource(name);
     }
     private static String resource(String name) {
         String path = "/local/mcgl/render/shaders/" + name;

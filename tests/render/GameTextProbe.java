@@ -50,7 +50,7 @@ public final class GameTextProbe {
                 g.glColor4f(1,0,0,.7f);quad(g,7,false);g.glColor4f(0,1,0,1);g.glBegin(6);g.glVertex3f(-.9f,-.9f,0);g.glVertex3f(.9f,-.9f,0);g.glVertex3f(0,.9f,0);g.glEnd();
                 g.glColor4f(0,0,1,1);g.glTranslatef(.3f,0,0);quad(g,5,false);
             });
-            cached(g);actualGlyphs(g,a,b);actualCachedStrings(g,a);fallback(g,a);scopes(g);bounds(g);
+            cached(g);litCached(g,a,b);actualGlyphs(g,a,b);actualCachedStrings(g,a);fallback(g,a);scopes(g);bounds(g);signCost(g,a,b);
             check(g.glGetError()==0,"text paths are Core-valid");
         }finally{reset(g);g.glDeleteTextures(a);g.glDeleteTextures(b);}
         System.out.println("GAME_TEXT_GPU_PASS checks="+checks+" exact-RGBA/actual-original-glyphs/order/bounds/lifetimes");return checks;
@@ -76,6 +76,108 @@ public final class GameTextProbe {
         g.glEnable(GL11C.GL_BLEND);g.glBlendFunc(770,771);g.glTranslatef(-.4f,-.2f,0);
         IntBuffer names=ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asIntBuffer();names.put(999).put(first).put(first+1).put(first).put(first).put(999);names.position(1);names.limit(5);
         g.glCallLists(names);check(names.position()==1&&names.limit()==5,"original list buffer cursor retained");g.glColor4f(.1f,.8f,.4f,.6f);g.glCallList(first);
+    }
+    private static void litCached(GameRenderCommands g,int a,int b)throws Exception {
+        int name=g.glGenLists(1);g.defineFontGlyphs(name,1);
+        OriginalChunkEmitter t=new OriginalChunkEmitter(new File("bin/mcgl.jar"),128);
+        g.glNewList(name,4864);t.begin();t.quad(-.4,-.3,.4,.3,0);t.draw();g.glTranslatef(.02f,.03f,0);g.glEndList();
+        try {
+            for(int shade:new int[]{7424,7425})for(boolean point:new boolean[]{false,true})for(int transform=0;transform<4;transform++) {
+                final int style=transform;long draws=g.drawCalls(),batches=g.textDraws(),glyphs=g.textGlyphs();
+                compare(g,"lit cached glyphs shade="+shade+" point="+point+" transform="+style,()->{
+                    litSetup(g,a,b,point,5634,2977);g.glShadeModel(shade);
+                    if(style==1){g.glRotatef(23,1,1,0);g.glScalef(.8f,.65f,1.1f);}
+                    if(style==2){g.glTranslated(-8192,8192,0);g.glTranslated(8192,-8192,0);g.glScalef(-.9f,.8f,.6f);}
+                    if(style==3)g.glScalef(.8f,.8f,0);
+                    litGlyphs(g,name);
+                });
+                check(g.textDraws()-batches==1&&g.textGlyphs()-glyphs==8,"lit cached glyphs share one run");
+                check(g.drawCalls()-draws==9,"eight standalone glyph draws versus one lit batch");
+            }
+            for(int material:new int[]{0,4608,4609,5634})for(int normalize:new int[]{0,2977,32826}) {
+                compare(g,"lit cached material="+material+" normalize="+normalize,()->{
+                    litSetup(g,a,b,true,material,normalize);g.glScalef(.9f,.7f,1.3f);litGlyphs(g,name);
+                });
+            }
+            compare(g,"lit cached light/material/normalization/texture/attribute barriers",()->{
+                litSetup(g,a,b,true,5634,2977);g.glCallList(name);
+                g.glPushAttrib(0x40|0x2000|1);g.glDisable(16385);g.glColorMaterial(1032,4608);g.glColor4f(.7f,.2f,.4f,.6f);g.glCallList(name);
+                g.glLight(16384,4611,floats(-.4f,.1f,1.2f,1));g.glCallList(name);g.glPopAttrib();g.glCallList(name);
+                g.glDisable(2977);g.glNormal3f(.2f,.3f,.7f);g.glCallList(name);
+                g.glBindTexture(3553,b);g.glCallList(name);g.glDisable(2896);g.glCallList(name);
+                g.glEnable(2896);g.glCallList(name);
+            });
+            try(GameEffect effect=new GameEffect("/shader/default","/shader/default")) {
+                long before=g.textGlyphs();
+                compare(g,"lit cached custom effect retains standalone path",()->{
+                    litSetup(g,a,b,false,5634,2977);effect.begin();try{g.glCallList(name);g.glTranslatef(.1f,.03f,0);g.glCallList(name);}finally{effect.end();}
+                });
+                check(g.textGlyphs()==before,"lit text does not replace custom effects");
+            }
+            for(int size:new int[]{0,1,16,17,32,33,64,65,128,129,256,257,512,513,1025}) {
+                reset(g);litSetup(g,a,b,false,5634,2977);long glyphs=g.textGlyphs(),draws=g.textDraws();
+                int scope=g.beginText();for(int i=0;i<size;i++)g.glCallList(name);g.endText(scope);
+                check(g.textGlyphs()-glyphs==size&&g.textDraws()-draws==(size+511)/512,"lit count and bounded split at "+size);
+            }
+            reset(g);litSetup(g,a,b,false,5634,2977);
+            for(int run=0;run<4;run++){int scope=g.beginText();for(int i=0;i<60;i++)g.glCallList(name);g.endText(scope);}
+            long creations=g.transientMeshCreations();
+            for(int run=0;run<8;run++){int scope=g.beginText();for(int i=0;i<60;i++)g.glCallList(name);g.endText(scope);}
+            check(g.transientMeshCreations()==creations,"warmed lit text reuses GPU meshes");
+        }finally{reset(g);g.glDeleteLists(name,1);}
+    }
+    private static void litSetup(GameRenderCommands g,int a,int b,boolean point,int material,int normalize) {
+        g.glEnable(2896);g.glEnable(16384);g.glEnable(16385);
+        g.glLight(16384,4611,floats(.4f,.7f,1,point?1:0));g.glLight(16385,4611,floats(-.8f,-.3f,.6f,point?1:0));
+        g.glLight(16384,4608,floats(.04f,.03f,.02f,1));g.glLight(16385,4608,floats(.02f,.03f,.04f,1));
+        g.glLight(16384,4609,floats(.45f,.33f,.25f,1));g.glLight(16385,4609,floats(.13f,.25f,.38f,1));
+        g.glLightModel(2899,floats(.1f,.15f,.2f,1));
+        if(material!=0){g.glColorMaterial(1032,material);g.glEnable(2903);}if(normalize!=0)g.glEnable(normalize);
+        g.glEnable(3553);g.glBindTexture(3553,a);g.glEnable(GL11C.GL_BLEND);g.glBlendFunc(770,771);
+        g.glActiveTexture(33985);g.glEnable(3553);g.glBindTexture(3553,b);g.glActiveTexture(33984);
+        g.glEnable(2912);g.glFogi(2917,9729);g.glFogf(2915,-.4f);g.glFogf(2916,1.5f);g.glFog(2918,floats(.2f,.1f,.3f,1));
+    }
+    private static void litGlyphs(GameRenderCommands g,int name) {
+        for(int i=0;i<8;i++) {
+            g.glPushMatrix();g.glTranslatef((i%4)*.4f-.6f,(i/4)*.7f-.35f,i*.02f);
+            g.glScalef(.6f,.5f+i*.02f,.7f+i*.03f);g.glColor4f(.2f+i*.08f,.6f-i*.03f,.3f+i*.05f,.7f);
+            g.glNormal3f(.2f+i*.07f,.4f,.8f-i*.07f);g.glMultiTexCoord2f(33985,i*.12f,.6f);g.glCallList(name);g.glPopMatrix();
+        }
+    }
+    /** Identical account-free sign text through standalone and batched paths; timings are not game FPS. */
+    private static void signCost(GameRenderCommands g,int a,int b)throws Exception {
+        int name=g.glGenLists(1);g.defineFontGlyphs(name,1);
+        OriginalChunkEmitter t=new OriginalChunkEmitter(new File("bin/mcgl.jar"),128);
+        g.glNewList(name,4864);t.begin();t.quad(0,0,.018,.07,0);t.draw();g.glTranslatef(.021f,0,0);g.glEndList();
+        try {
+            byte[] expected=null;
+            for(boolean batch:new boolean[]{false,true}) {
+                reset(g);litSetup(g,a,b,false,5634,2977);g.glNormal3f(0,0,1);
+                clear(g);signScene(g,name,batch);byte[] image=pixels(g);
+                if(expected==null)expected=image;else equal(expected,image,"16 four-line lit signs, 16 glyphs per line");
+                for(int frame=0;frame<16;frame++){clear(g);signScene(g,name,batch);GL11C.glFinish();}
+                double[] times=new double[48];long draws=g.drawCalls(),created=g.transientMeshCreations();
+                for(int frame=0;frame<times.length;frame++) {
+                    long start=System.nanoTime();clear(g);signScene(g,name,batch);GL11C.glFinish();times[frame]=(System.nanoTime()-start)/1e6;
+                }
+                long perFrame=(g.drawCalls()-draws)/times.length;Arrays.sort(times);
+                check(perFrame==(batch?64:1024),"sign fixture exact draw count");
+                check(g.transientMeshCreations()==created,"warmed sign fixture has no GPU mesh churn");
+                System.out.printf(Locale.ROOT,"SIGN_TEXT_COST case=%s glyphs=1024 lines=64 draws_per_frame=%d p50_ms=%.3f p95_ms=%.3f synthetic-not-game-fps%n",
+                        batch?"lit-batched":"standalone",perFrame,times[times.length/2],times[(int)Math.ceil(times.length*.95)-1]);
+            }
+        }finally{reset(g);g.glDeleteLists(name,1);}
+    }
+    private static void signScene(GameRenderCommands g,int name,boolean batch) {
+        for(int sign=0;sign<16;sign++) {
+            g.glPushMatrix();g.glTranslatef((sign%4)*.48f-.94f,(sign/4)*.46f-.91f,0);g.glRotatef((sign%3-1)*15,0,1,0);
+            for(int line=0;line<4;line++) {
+                int scope=batch?g.beginText():0;g.glPushMatrix();g.glTranslatef(0,line*.085f,0);
+                for(int letter=0;letter<16;letter++){if(letter%4==0)g.glColor4f(.3f+letter*.025f,.6f,.8f,1);g.glCallList(name);}
+                g.glPopMatrix();if(batch)g.endText(scope);
+            }
+            g.glPopMatrix();
+        }
     }
     private static void actualGlyphs(GameRenderCommands g,int a,int b)throws Exception {
         // TEST ONLY: bypass texture-loader/game constructors; invoke the actual untouched glyph methods.
@@ -120,14 +222,14 @@ public final class GameTextProbe {
                 Class<?> coordinate=integer?int.class:float.class;Class<?>[] signature={String.class,coordinate,coordinate,int.class,boolean.class};
                 Method body=type.getDeclaredMethod("mcglDrawTextBody",signature),wrapper=type.getMethod("o00000",signature);body.setAccessible(true);
                 Object x=integer?(Object)Integer.valueOf(0):Float.valueOf(.15f),y=integer?(Object)Integer.valueOf(0):Float.valueOf(.25f);
-                for(boolean shadow:new boolean[]{false,true}) {
+                for(boolean shadow:new boolean[]{false,true})for(boolean lit:new boolean[]{false,true}) {
                     if(integer&&shadow)continue; // Integer boolean is decoration, not a shadow flag.
                     String message="AbCD §2EfGh §cIjKl MNOP";
-                    reset(g);clear(g);g.glEnable(3553);g.glScalef(.012f,.08f,0);set(font,"ô00000",ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asIntBuffer());
+                    reset(g);clear(g);cachedFontSetup(g,lit);set(font,"ô00000",ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asIntBuffer());
                     body.invoke(font,message,x,y,0xaaffcc80,shadow);byte[] expected=pixels(g);float[] expectedMatrix=matrix(g),expectedColor=color(g);
-                    reset(g);clear(g);g.glEnable(3553);g.glScalef(.012f,.08f,0);set(font,"ô00000",ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asIntBuffer());
+                    reset(g);clear(g);cachedFontSetup(g,lit);set(font,"ô00000",ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asIntBuffer());
                     long draws=g.textDraws(),glyphs=g.textGlyphs();wrapper.invoke(font,message,x,y,0xaaffcc80,shadow);
-                    equal(expected,pixels(g),"actual complete cached string wrapper integer="+integer+" shadow="+shadow);
+                    equal(expected,pixels(g),"actual complete cached string wrapper integer="+integer+" shadow="+shadow+" lit="+lit);
                     check(g.textDraws()-draws==1&&g.textGlyphs()-glyphs>12,"actual cached string batches across original buffer drains and color codes");
                     check(Arrays.equals(expectedMatrix,matrix(g))&&Arrays.equals(expectedColor,color(g)),"actual cached string final state retained");
                 }
@@ -137,6 +239,11 @@ public final class GameTextProbe {
                 wrapper.invoke(font,null,x,y,-1,false);scope=g.beginText();check(scope==1,"actual null string releases text scope");g.endText(scope);
             }
         }finally{g.glDeleteLists(first,288);}
+    }
+    private static void cachedFontSetup(GameRenderCommands g,boolean lit) {
+        g.glEnable(3553);
+        if(lit){g.glEnable(2896);g.glEnable(16384);g.glEnable(2977);g.glEnable(2903);g.glNormal3f(0,0,-1);g.glLight(16384,4611,floats(.3f,.5f,-1,0));g.glRotatef(18,0,1,0);}
+        g.glScalef(.012f,.08f,lit?.012f:0);
     }
     private static void scopes(GameRenderCommands g)throws Exception {
         reset(g);clear(g);long calls=g.textDraws();int outer=g.beginText();quad(g,7,false);int inner=g.beginText();quad(g,5,false);g.endText(inner);check(g.textDraws()==calls,"nested scope does not prematurely flush");g.endText(outer);check(g.textDraws()==calls+1,"outer scope flushes once");
@@ -154,7 +261,7 @@ public final class GameTextProbe {
             reset(g);long glyphs=g.textGlyphs(),calls=g.textDraws();int scope=g.beginText();for(int i=0;i<size;i++)quad(g,5,false);g.endText(scope);
             check(g.textGlyphs()-glyphs==size&&g.textDraws()-calls==(size+511)/512,"exact live count and split at 512");
         }
-        check(g.transientMeshCount()<=90&&g.transientMeshBytes()<=11L*1024*1024,"ordinary and text streams bounded independently");
+        check(g.transientMeshCount()<=108&&g.transientMeshBytes()<=16L*1024*1024,"ordinary and both text layouts retain bounded streams");
         reset(g);for(int warm=0;warm<4;warm++){int scope=g.beginText();for(int i=0;i<60;i++)quad(g,7,false);g.endText(scope);}long creations=g.transientMeshCreations();
         for(int warm=0;warm<8;warm++){int scope=g.beginText();for(int i=0;i<60;i++)quad(g,7,false);g.endText(scope);}check(g.transientMeshCreations()==creations,"warmed text causes no GPU object churn");
     }
@@ -173,9 +280,12 @@ public final class GameTextProbe {
     }
     private static void reset(GameRenderCommands g) {
         for(int unit=0;unit<2;unit++){g.glActiveTexture(33984+unit);g.glDisable(3553);g.glBindTexture(3553,0);g.glMatrixMode(5890);g.glLoadIdentity();g.glMultiTexCoord2f(33984+unit,0,0);}g.glActiveTexture(33984);
-        for(int cap:new int[]{2896,3008,2912,2903,GL11C.GL_BLEND,GL11C.GL_DEPTH_TEST,GL11C.GL_CULL_FACE,GL11C.GL_SCISSOR_TEST})g.glDisable(cap);
+        for(int cap:new int[]{2896,16384,16385,2977,32826,3008,2912,2903,GL11C.GL_BLEND,GL11C.GL_DEPTH_TEST,GL11C.GL_CULL_FACE,GL11C.GL_SCISSOR_TEST})g.glDisable(cap);
         g.glColorMask(true,true,true,true);g.glDepthMask(true);g.glFrontFace(GL11C.GL_CCW);g.glShadeModel(7425);g.glColor4f(1,1,1,1);g.glViewport(0,0,64,64);
         g.glMatrixMode(5889);g.glLoadIdentity();g.glMatrixMode(5888);g.glLoadIdentity();
+        g.glNormal3f(0,0,1);g.glColorMaterial(1032,5634);g.glEnable(2903);g.glColor4f(.2f,.2f,.2f,1);g.glColorMaterial(1032,4609);g.glColor4f(.8f,.8f,.8f,1);g.glDisable(2903);g.glColorMaterial(1032,5634);g.glColor4f(1,1,1,1);
+        g.glLightModel(2899,floats(.2f,.2f,.2f,1));
+        for(int i=0;i<2;i++){g.glLight(16384+i,4611,floats(0,0,1,0));g.glLight(16384+i,4608,floats(0,0,0,1));g.glLight(16384+i,4609,floats(i==0?1:0,i==0?1:0,i==0?1:0,1));}
     }
     private static void clear(GameRenderCommands g){g.glClearColor(0,0,0,1);g.glClear(GL11C.GL_COLOR_BUFFER_BIT);}
     private static byte[] pixels(GameRenderCommands g){ByteBuffer b=ByteBuffer.allocateDirect(64*64*4);g.glReadPixels(0,0,64,64,6408,5121,b);byte[] out=new byte[b.remaining()];b.get(out);return out;}
