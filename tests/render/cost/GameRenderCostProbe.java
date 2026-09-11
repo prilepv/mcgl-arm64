@@ -25,6 +25,7 @@ public final class GameRenderCostProbe {
             g.glActiveTexture(33985);g.glBindTexture(3553,texture);g.glActiveTexture(33984);
             int[] quad=quad();int model=g.glGenLists(1);g.glNewList(model,4864);raw(g,quad);g.glEndList();
             measure("cached-model-512",g,()->{for(int i=0;i<512;i++){g.glPushMatrix();g.glTranslatef((i%32)/32f,0,0);g.glCallList(model);g.glPopMatrix();}});
+            modelBatchCost(g);
             measure("dynamic-batches-96",g,()->{for(int i=0;i<96;i++)raw(g,quad);});
             fontCost(g,texture);
             originalTerrainCost(g);
@@ -109,6 +110,43 @@ public final class GameRenderCostProbe {
         Display.update();
     }
     private static void raw(GameRenderCommands g,int[] words){g.raw(words,words.length,words.length/8,7,false,true,true,false,false,false);}
+    private static void modelBatchCost(GameRenderCommands g) {
+        // Both variants are compiled once, then alternate in the same warmed context.
+        // Reproduce the original six separate textured/normal-bearing box faces.
+        String previous=System.getProperty("mcgl.model.batch");int[] names=new int[2];
+        int[][] faces=modelFaces();
+        try {
+            for(int variant=0;variant<2;variant++) {
+                System.setProperty("mcgl.model.batch",Boolean.toString(variant==1));
+                names[variant]=g.glGenLists(1);g.glNewList(names[variant],4864);
+                for(int[] face:faces)g.raw(face,32,4,7,false,true,false,true,false,true);
+                g.glEndList();
+            }
+            g.glPushAttrib(0x2000);g.glEnable(3553);g.glEnable(2896);g.glEnable(16384);
+            try {
+                for(int round=0;round<4;round++)for(int variant:new int[]{round%2,1-round%2}) {
+                    final int model=names[variant];
+                    measure("model-boxes-256-"+(variant==0?"reference":"merged")+"-round-"+round,g,()->{
+                        for(int i=0;i<256;i++){g.glPushMatrix();g.glTranslatef((i%16)*.1f-.8f,(i/16)*.1f-.8f,0);g.glRotatef(i%73,1,1,0);g.glCallList(model);g.glPopMatrix();}
+                    });
+                }
+            } finally {g.glPopAttrib();}
+        } finally {
+            if(previous==null)System.clearProperty("mcgl.model.batch");else System.setProperty("mcgl.model.batch",previous);
+            for(int name:names)if(name!=0)g.glDeleteLists(name,1);
+        }
+    }
+    private static int[][] modelFaces() {
+        int[][] faces=new int[6][32];
+        for(int face=0;face<6;face++)for(int v=0;v<4;v++) {
+            float[] p=new float[3];int axis=face/2;
+            p[axis]=(face%2==0?-.04f:.04f);p[(axis+1)%3]=v==1||v==2?.04f:-.04f;p[(axis+2)%3]=v>=2?.04f:-.04f;
+            for(int d=0;d<3;d++)faces[face][v*8+d]=Float.floatToRawIntBits(p[d]);
+            faces[face][v*8+3]=Float.floatToRawIntBits(v==1||v==2?1:0);faces[face][v*8+4]=Float.floatToRawIntBits(v>=2?1:0);
+            faces[face][v*8+6]=((face%2==0?-127:127)&255)<<(axis*8);
+        }
+        return faces;
+    }
     private static void fontCost(GameRenderCommands g,int texture) {
         // The identical fixture also runs against build 182; optional scope methods are resolved once.
         java.lang.reflect.Method begin=optional(g,"beginText"),end=optional(g,"endText",int.class),define=optional(g,"defineFontGlyphs",int.class,int.class);
@@ -161,6 +199,17 @@ public final class GameRenderCostProbe {
         List<Integer> shuffled=new ArrayList<Integer>();for(int i=0;i<count;i++)shuffled.add(first+i*3);Collections.shuffle(shuffled,new Random(184));
         java.nio.IntBuffer scattered=java.nio.ByteBuffer.allocateDirect(count*4).order(java.nio.ByteOrder.nativeOrder()).asIntBuffer();for(int h:shuffled)scattered.put(h);scattered.flip();
         measure("original-scattered-order-1024x256",g,()->g.glCallLists(scattered));
+        // The actual alpha-sort branch uses individual lists with external
+        // camera transforms. Test both scopes on the SAME renderer and geometry.
+        java.lang.reflect.Method beginWorld=optional(g,"beginOriginalTerrain"),endWorld=optional(g,"endOriginalTerrain",int.class);
+        for(int round=0;round<3;round++)for(boolean scoped:new boolean[]{(round&1)!=0,(round&1)==0}){
+            if(scoped&&beginWorld==null)continue;
+            measure((scoped?"original-individual-scoped-1024x256":"original-individual-unscoped-1024x256")+"-round-"+round,g,()->{
+                int scope=scoped?(Integer)invoke(g,beginWorld):0;
+                try{for(int i=0;i<scattered.remaining();i++){g.glPushMatrix();g.glTranslated((i%4)*.25,(i%3)*.125,0);g.glCallList(scattered.get(i));g.glPopMatrix();}}
+                finally{if(scoped)invoke(g,endWorld,scope);}
+            });
+        }
         measure("original-rebuild-one-then-1024x256",g,()->{
             invoke(g,begin,first,3);g.glNewList(first,4864);g.glPushMatrix();g.glTranslatef(-256,0,-256);g.glDepthMask(true);raw(g,surface);g.glPopMatrix();g.glEndList();invoke(g,finish);g.glCallLists(opaque);
         });

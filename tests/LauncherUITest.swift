@@ -115,7 +115,7 @@ struct LauncherUITest {
             }
             if index == 4 {
                 precondition(button("page-4").title == "Изменения")
-                precondition(preferences.lastReadChangelogVersion == "1.7.1")
+                precondition(preferences.lastReadChangelogVersion == "1.7.2")
                 let scroll = descendants(root).compactMap { $0 as? NSScrollView }
                     .first { $0.identifier?.rawValue == "changelog-scroll" }!
                 let document = scroll.documentView!
@@ -132,7 +132,7 @@ struct LauncherUITest {
                 }
                 let installed = descendants(document).compactMap { $0 as? NSTextField }
                     .filter { $0.stringValue == "УСТАНОВЛЕНА" }
-                precondition(installed.count == 1 && installed[0].identifier?.rawValue == "changelog-status-1.7.1")
+                precondition(installed.count == 1 && installed[0].identifier?.rawValue == "changelog-status-1.7.2")
                 document.scroll(NSPoint(x: 200, y: document.bounds.height))
                 precondition(scroll.contentView.bounds.origin.x == 0 && scroll.contentView.bounds.origin.y > 500)
                 document.scroll(.zero)

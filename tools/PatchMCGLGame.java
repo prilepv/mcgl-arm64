@@ -183,7 +183,7 @@ public final class PatchMCGLGame implements Opcodes {
         // The control path keeps BOTH original alpha-sort choices, selected-chunk order,
         // one-at-a-time resort queue, region groups, lightmap hooks and pass replay unchanged.
         // The common call-site pass below still routes every GL operation into Core meshes.
-        if(originalChunks){worlds++;return;}
+        if(originalChunks){originalTerrainBody(node,draw);worlds++;return;}
         AbstractInsnNode cut=null;int cameras=0;
         for(AbstractInsnNode i:filter.instructions.toArray())if(i instanceof FieldInsnNode) {
             FieldInsnNode f=(FieldInsnNode)i;
@@ -262,6 +262,22 @@ public final class PatchMCGLGame implements Opcodes {
         wrapper.visitLabel(finish);wrapper.visitInsn(RETURN);
         wrapper.visitLabel(failure);wrapper.visitFrame(F_FULL,7,new Object[]{node.name,"java/lang/String",integer?INTEGER:FLOAT,integer?INTEGER:FLOAT,INTEGER,INTEGER,INTEGER},1,new Object[]{"java/lang/Throwable"});wrapper.visitVarInsn(ASTORE,7);
         game(wrapper);wrapper.visitVarInsn(ILOAD,6);wrapper.visitMethodInsn(INVOKEINTERFACE,COMMANDS,"abortText","(I)V");wrapper.visitVarInsn(ALOAD,7);wrapper.visitInsn(ATHROW);
+        wrapper.visitTryCatchBlock(start,finish,failure,"java/lang/Throwable");end(wrapper);
+    }
+    private static void originalTerrainBody(ClassNode node,MethodNode body) {
+        String name=body.name;int access=body.access;
+        body.name="mcglDrawOriginalTerrainBody";body.access=ACC_PRIVATE;
+        MethodNode wrapper=new MethodNode(access,name,body.desc,body.signature,body.exceptions==null?null:(String[])body.exceptions.toArray(new String[0]));
+        node.methods.add(wrapper);wrapper.visitCode();
+        game(wrapper);wrapper.visitMethodInsn(INVOKEINTERFACE,COMMANDS,"beginOriginalTerrain","()I");wrapper.visitVarInsn(ISTORE,4);
+        Label start=new Label(),finish=new Label(),failure=new Label();
+        wrapper.visitLabel(start);wrapper.visitVarInsn(ALOAD,0);wrapper.visitVarInsn(ILOAD,1);wrapper.visitVarInsn(DLOAD,2);
+        wrapper.visitMethodInsn(INVOKESPECIAL,node.name,body.name,body.desc);
+        // The cleanup call is outside the protected region: a failed flush must
+        // not end the already-released scope a second time.
+        wrapper.visitLabel(finish);game(wrapper);wrapper.visitVarInsn(ILOAD,4);wrapper.visitMethodInsn(INVOKEINTERFACE,COMMANDS,"endOriginalTerrain","(I)V");wrapper.visitInsn(RETURN);
+        wrapper.visitLabel(failure);wrapper.visitFrame(F_FULL,4,new Object[]{node.name,INTEGER,DOUBLE,INTEGER},1,new Object[]{"java/lang/Throwable"});wrapper.visitVarInsn(ASTORE,5);
+        game(wrapper);wrapper.visitVarInsn(ILOAD,4);wrapper.visitMethodInsn(INVOKEINTERFACE,COMMANDS,"endOriginalTerrain","(I)V");wrapper.visitVarInsn(ALOAD,5);wrapper.visitInsn(ATHROW);
         wrapper.visitTryCatchBlock(start,finish,failure,"java/lang/Throwable");end(wrapper);
     }
     private static void game(MethodVisitor v){v.visitMethodInsn(INVOKESTATIC,SYSTEM,"game","()L"+COMMANDS+";");}

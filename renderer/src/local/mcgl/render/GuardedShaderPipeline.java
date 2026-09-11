@@ -1,6 +1,7 @@
 package local.mcgl.render;
 
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -66,6 +67,7 @@ final class GuardedShaderPipeline implements ShaderPipeline {
             public void setMatrix3(FloatBuffer value) { check(); targetUniform.setMatrix3(value); }
             public void setMatrix4(FloatBuffer value) { check(); targetUniform.setMatrix4(value); }
             public void setMatrix4Array(FloatBuffer value) { check(); targetUniform.setMatrix4Array(value); }
+            public void setIntArray(IntBuffer value) { check(); targetUniform.setIntArray(value); }
         }
     }
 }

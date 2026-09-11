@@ -96,15 +96,15 @@ final class NativeShaderPipeline implements ShaderPipeline {
                 for (int index = 0; index < count; index++) {
                     String name = GL20C.glGetActiveUniform(id, index, nameLength, size, type);
                     int length=size.get(0);boolean array=length!=1||name.indexOf('[')>=0;
-                    if(array&&(type.get(0)!=GL20C.GL_FLOAT_MAT4||length<1||length>32||!name.matches("[A-Za-z_][A-Za-z_0-9]*\\[0\\]")))
-                        throw failure(label, "uniform reflection", "Only bounded plain mat4 arrays are supported: " + name);
+                    if(array&&((type.get(0)!=GL20C.GL_FLOAT_MAT4&&type.get(0)!=GL11C.GL_INT)||length<1||length>((name.equals("uOriginalModelPalette[0]")||name.equals("uOriginalInputPalette[0]"))?128:32)||!name.matches("[A-Za-z_][A-Za-z_0-9]*\\[0\\]")))
+                        throw failure(label, "uniform reflection", "Only bounded plain mat4/int arrays are supported: " + name);
                     int location = GL20C.glGetUniformLocation(id, name);
                     if (location < 0)
                         throw failure(label, "uniform reflection", "Uniform blocks are not supported by this contract: " + name);
                     ShaderUniform.Type mappedType;
                     try { mappedType = uniformType(type.get(0)); }
                     catch (IllegalArgumentException problem) { throw failure(label, "uniform reflection", name + ": " + problem.getMessage()); }
-                    if(array){name=name.substring(0,name.length()-3);mappedType=ShaderUniform.Type.MAT4_ARRAY;}
+                    if(array){name=name.substring(0,name.length()-3);mappedType=type.get(0)==GL11C.GL_INT?ShaderUniform.Type.INT_ARRAY:ShaderUniform.Type.MAT4_ARRAY;}
                     uniforms.put(name, new Uniform(name, location, mappedType,length));
                 }
             }
@@ -140,7 +140,7 @@ final class NativeShaderPipeline implements ShaderPipeline {
             private final int length;
             Uniform(String name, int location, Type type,int length) {
                 this.name = name; this.location = location; this.type = type;
-                this.length=length;bits=new int[type==Type.MAT4_ARRAY?length*16:16];
+                this.length=length;bits=new int[type==Type.MAT4_ARRAY?length*16:type==Type.INT_ARRAY?length:16];
             }
             public String name() { return name; }
             public Type type() { return type; }
@@ -150,9 +150,9 @@ final class NativeShaderPipeline implements ShaderPipeline {
             }
             public void setInt(int value) {
                 check();
-                if (type != Type.INT && type != Type.BOOL && type != Type.SAMPLER_2D)
+                if (type != Type.INT && type != Type.BOOL && type != Type.SAMPLER_2D && type != Type.SAMPLER_2D_ARRAY)
                     throw new IllegalArgumentException("Uniform " + name + " is not an integer/bool/sampler");
-                if ((type == Type.BOOL && value != 0 && value != 1) || (type == Type.SAMPLER_2D && value < 0))
+                if ((type == Type.BOOL && value != 0 && value != 1) || ((type == Type.SAMPLER_2D || type == Type.SAMPLER_2D_ARRAY) && value < 0))
                     throw new IllegalArgumentException("Invalid bool/sampler value for " + name);
                 if (initialized && integer == value) return;
                 GL41C.glProgramUniform1i(id, location, value);
@@ -170,6 +170,14 @@ final class NativeShaderPipeline implements ShaderPipeline {
             }
             public void setMatrix4Array(FloatBuffer value) {
                 require(Type.MAT4_ARRAY);matrix(value,Math.multiplyExact(length,16));if(!changed(value))return;GL41C.glProgramUniformMatrix4fv(id,location,false,value);
+            }
+            public void setIntArray(IntBuffer value) {
+                require(Type.INT_ARRAY);
+                if(value==null||!value.isDirect()||value.order()!=ByteOrder.nativeOrder()||value.remaining()!=length)
+                    throw new IllegalArgumentException("Expected a native-order direct buffer containing exactly "+length+" integers");
+                boolean changed=!initialized;
+                for(int i=0;i<length;i++){int next=value.get(value.position()+i);if(bits[i]!=next)changed=true;bits[i]=next;}
+                initialized=true;if(changed)GL41C.glProgramUniform1iv(id,location,value);
             }
             private boolean changed(int size,float x,float y,float z,float w) {
                 int a=Float.floatToRawIntBits(x),b=Float.floatToRawIntBits(y),c=Float.floatToRawIntBits(z),d=Float.floatToRawIntBits(w);
@@ -192,6 +200,7 @@ final class NativeShaderPipeline implements ShaderPipeline {
             case GL11C.GL_INT: return ShaderUniform.Type.INT;
             case GL20C.GL_BOOL: return ShaderUniform.Type.BOOL;
             case GL20C.GL_SAMPLER_2D: return ShaderUniform.Type.SAMPLER_2D;
+            case org.lwjgl.opengl.GL30C.GL_SAMPLER_2D_ARRAY: return ShaderUniform.Type.SAMPLER_2D_ARRAY;
             case GL11C.GL_FLOAT: return ShaderUniform.Type.FLOAT;
             case GL20C.GL_FLOAT_VEC2: return ShaderUniform.Type.VEC2;
             case GL20C.GL_FLOAT_VEC3: return ShaderUniform.Type.VEC3;

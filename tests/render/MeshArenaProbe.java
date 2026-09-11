@@ -18,7 +18,7 @@ public final class MeshArenaProbe {
     private static final String FRAGMENT="#version 410 core\nin vec4 c;out vec4 outputColor;void main(){outputColor=c;}";
     public static int run(RenderContext context)throws Exception{
         checks=0;MeshPipeline pipeline=context.meshes();
-        rejects(()->pipeline.createArena("bad label",8,12,4096));rejects(()->pipeline.createArena("bad/count",0,12,4096));rejects(()->pipeline.createArena("bad/bytes",8,12,257L*1024*1024));
+        rejects(()->pipeline.createArena("bad label",8,12,4096));rejects(()->pipeline.createArena("bad/count",0,12,4096));rejects(()->pipeline.createArena("bad/bytes",8,12,321L*1024*1024));
         ShaderProgram program=context.shaders().create(new ShaderSources("arena/palette",VERTEX,FRAGMENT));ShaderUniform palette=program.uniform("palette");
         check(palette.type()==ShaderUniform.Type.MAT4_ARRAY&&program.uniformNames().contains("palette"),"bounded matrix array has an explicit uniform type");
         FloatBuffer matrices=buffer(32*64+16).asFloatBuffer();matrices.position(2);matrices.limit(32*16+2);for(int tag=0;tag<32;tag++)for(int i=0;i<16;i++)matrices.put(2+tag*16+i,i%5==0?1:0);
@@ -54,6 +54,7 @@ public final class MeshArenaProbe {
         rebuildSpare(pipeline,red);
         imports(pipeline,program,palette,matrices);
         partialPage(pipeline,red);
+        packedTags(context);
         foreign(()->{rejects(()->arena.tag(a));rejects(()->arena.draw(Mesh.Primitive.TRIANGLES,Arrays.asList(a,b)));rejects(()->arena.create("arena/foreign-thread",red));rejects(arena::close);rejects(a::close);rejects(()->palette.setMatrix4Array(matrices));});
         long created=arena.pageCreations();a.close();a.close();Mesh replacement=arena.create("arena/reused-hole",red);
         check(arena.pageCreations()==created&&arena.residentMembers()==4&&!b.isClosed()&&replacement!=null,"retiring one member reuses its range without touching neighbors or creating a page");
@@ -68,6 +69,26 @@ public final class MeshArenaProbe {
         check(GL11C.glGetError()==0,"shared pages and matrix arrays are Core-valid");System.out.println("MESH_ARENA_GPU_PASS checks="+checks);return checks;
     }
     public static int verifyRetired(){int before=checks;check(retainedArena.isClosed()&&retainedMember.isClosed()&&retainedProgram.isClosed(),"context destruction invalidates live arenas, member views and palettes");rejects(()->retainedMember.draw(Mesh.Primitive.TRIANGLES));rejects(()->retainedArena.residentBytes());rejects(()->retainedPalette.setMatrix4Array(buffer(2048).asFloatBuffer()));retainedMember.close();retainedArena.close();retainedProgram.close();return checks-before;}
+    private static void packedTags(RenderContext context){
+        VertexLayout layout=new VertexLayout(20,new VertexLayout.Attribute(0,3,VertexLayout.Storage.FLOAT32,false,0),new VertexLayout.Attribute(1,4,VertexLayout.Storage.UINT8,true,12));
+        rejects(()->new MeshArena.Tags(0));rejects(()->new MeshArena.Tags(33));rejects(()->new MeshArena.Tags(256));
+        rejects(()->new MeshArena.Tags(128,layout,12));rejects(()->new MeshArena.Tags(128,layout,20));rejects(()->new MeshArena.Tags(128,null,19));
+        ByteBuffer bytes=buffer(80),source=data(180,70,140,128).vertices();
+        for(int v=0;v<4;v++){for(int b=0;b<16;b++)bytes.put(source.get(v*16+b));bytes.putInt(0xa1b2c3d4);}bytes.flip();
+        MeshData input=new MeshData(layout,bytes,IndexData.quads(4));
+        int previousProgram=GL11C.glGetInteger(GL20C.GL_CURRENT_PROGRAM),previousRead=GL11C.glGetInteger(GL31C.GL_COPY_READ_BUFFER);
+        try(MeshArena arena=context.meshes().createArena("arena/packed",1024,1536,32768,new MeshArena.Tags(128,layout,19));
+                ShaderProgram shader=context.shaders().create(new ShaderSources("arena/packed-palette",VERTEX.replace("palette[32]","uOriginalModelPalette[128]").replace("palette[int(tag)]","uOriginalModelPalette[int(tag)]"),FRAGMENT));
+                Mesh reference=context.meshes().create("arena/packed-reference",input,MeshPipeline.Usage.STATIC)){
+            FloatBuffer matrix=buffer(128*64).asFloatBuffer();for(int tag=0;tag<128;tag++)for(int i=0;i<16;i++)matrix.put(tag*16+i,i%5==0?1:0);shader.uniform("uOriginalModelPalette").setMatrix4Array(matrix);shader.bind();
+            List<Mesh> members=new ArrayList<Mesh>();for(int i=0;i<130;i++){Mesh member=arena.create("arena/packed-member",input);members.add(member);check(arena.tag(member)==i%128&&member.layout().stride()==20,"byte tags cover all 128 slots without changing source stride");}
+            clear();for(int i=0;i<130;i++)reference.draw(Mesh.Primitive.TRIANGLES);byte[] expected=pixels();clear();arena.draw(Mesh.Primitive.TRIANGLES,members);check(Arrays.equals(expected,pixels()),"packed tags preserve independently drawn ordered pixels");
+            int vbo=GL20C.glGetVertexAttribi(0,GL20C.GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);GL15C.glBindBuffer(GL31C.GL_COPY_READ_BUFFER,vbo);ByteBuffer uploaded=buffer(130*80);GL15C.glGetBufferSubData(GL31C.GL_COPY_READ_BUFFER,0,uploaded);
+            for(int member=0;member<130;member++)for(int v=0;v<4;v++)for(int b=0;b<20;b++)check(uploaded.get(member*80+v*20+b)==(b==19?(byte)(member%128):bytes.get(v*20+b)),"only the explicitly unused byte changes during upload");
+            for(Mesh member:members)member.close();Mesh imported=arena.importMesh("arena/packed-import",reference,1024);check(imported!=null&&imported.layout().stride()==20,"immutable import uses the same compact tag format");
+            clear();reference.draw(Mesh.Primitive.TRIANGLES);expected=pixels();clear();imported.draw(Mesh.Primitive.TRIANGLES);check(Arrays.equals(expected,pixels()),"compact import preserves original geometry");
+        }finally{GL15C.glBindBuffer(GL31C.GL_COPY_READ_BUFFER,previousRead);GL20C.glUseProgram(previousProgram);}
+    }
     private static void rebuildSpare(MeshPipeline pipeline,MeshData data){
         try(MeshArena arena=pipeline.createArena("arena/rebuild-spare",8,12,512)){
             Mesh stable=arena.create("arena/stable",data),current=arena.create("arena/rebuilt",data);

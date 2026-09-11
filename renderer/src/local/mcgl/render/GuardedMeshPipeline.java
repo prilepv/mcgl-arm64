@@ -23,10 +23,14 @@ final class GuardedMeshPipeline implements MeshPipeline {
     }
     public void unbind() { context.checkOwner(); delegate.unbind(); }
     public MeshArena createArena(String label,int vertexCapacity,int indexCapacity,long byteBudget) {
+        return createArena(label,vertexCapacity,indexCapacity,byteBudget,MeshArena.Tags.DEFAULT);
+    }
+    public MeshArena createArena(String label,int vertexCapacity,int indexCapacity,long byteBudget,MeshArena.Tags tags) {
         context.checkOwner();
+        if(tags==null)throw new NullPointerException("arena tags");
         if(label==null||!label.matches("[A-Za-z0-9_./-]{1,128}"))throw new IllegalArgumentException("Invalid arena label");
-        if(vertexCapacity<1||vertexCapacity>4*1024*1024||indexCapacity<1||indexCapacity>12*1024*1024||byteBudget<1||byteBudget>256L*1024*1024)throw new IllegalArgumentException("Invalid arena bounds");
-        MeshArena arena=delegate.createArena(label,vertexCapacity,indexCapacity,byteBudget);
+        if(vertexCapacity<1||vertexCapacity>6*1024*1024||indexCapacity<1||indexCapacity>12*1024*1024||byteBudget<1||byteBudget>320L*1024*1024)throw new IllegalArgumentException("Invalid arena bounds");
+        MeshArena arena=delegate.createArena(label,vertexCapacity,indexCapacity,byteBudget,tags);
         if(arena==null)throw new IllegalStateException("Backend did not create an arena");
         return new GuardedArena(arena);
     }

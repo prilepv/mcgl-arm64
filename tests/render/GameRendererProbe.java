@@ -12,6 +12,10 @@ public final class GameRendererProbe {
     private static int checks;
     public static void main(String[] args)throws Exception {
         for(int lifetime=0;lifetime<2;lifetime++) {
+            System.setProperty("mcgl.terrain.materials",Boolean.toString(lifetime!=0));
+            System.setProperty("mcgl.terrain.wideArena",Boolean.toString(lifetime!=0));
+            System.setProperty("mcgl.terrain.textureArrays",Boolean.toString(lifetime!=0));
+            System.setProperty("mcgl.graphics.unlitShaders",Boolean.toString(lifetime!=0));
             Display.setDisplayMode(new DisplayMode(300,220));Display.setTitle("MCGL — migrated game calls");MCGLCoreDisplay.create(new PixelFormat().withDepthBits(24).withStencilBits(8));
             GameRenderCommands g=RenderSystem.game();
             try {
@@ -48,6 +52,8 @@ public final class GameRendererProbe {
                 t.begin();t.quad(-.5,-.5,.5,.5,0);t.draw();t.unbind();check(builder.finish().vertexCount==4&&g.rawBatches()==before,"explicit stage 9 sink remains available");
                 lines(g);textures(g);terrain(g,t);terrainFan(g,t);terrainBatchEdges(g,t);terrainRegions(g,t);terrainVisibility(g);terrainSwitches(g,t);checks+=GameChunkTexturesProbe.run(g);checks+=OriginalChunkCacheProbe.run(g);dynamicMeshes(g,t);originalChunk(g);originalEffects();
                 checks+=GameTextProbe.run(g);checks+=GameTerrainBatchProbe.run(g);checks+=GameTerrainRecoveryProbe.run(g);
+                checks+=GameModelBatchProbe.run(g);
+                checks+=GameTerrainMaterialsProbe.run(g);
                 AtomicReference<Throwable> failure=new AtomicReference<Throwable>();Thread foreign=new Thread(()->{try{g.glColor3f(1,1,1);}catch(Throwable e){failure.set(e);}});foreign.start();foreign.join();check(failure.get() instanceof IllegalStateException,"retained game facade enforces owner");
                 int cached=g.cachedModels();check(cached==3&&g.cachedModelDraws()>=5,"GPU model registry connected");g.glDeleteLists(model,3);check(g.cachedModels()==0,"model deletion retires meshes");
                 check(g.glGetError()==0,"all migrated game calls are Core-valid");g.GL30_glBindFramebuffer(GL30C.GL_FRAMEBUFFER,0);GL30C.glDeleteFramebuffers(fbo);GL30C.glDeleteRenderbuffers(color);Display.update();

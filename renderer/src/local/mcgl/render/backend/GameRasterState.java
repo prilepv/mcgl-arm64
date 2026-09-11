@@ -103,6 +103,9 @@ final class GameRasterState {
         for(int i=0;i<parameters.length;i++)parameters[i]=GL11C.glGetTexParameteri(GL11C.GL_TEXTURE_2D,TEXTURE_PARAMETERS[i]);
         textureParameters.put(texture,parameters);
     }
+    int[] originalTextureParameters(int texture){return textureParameters.get(texture);}
+    int originalBoundTexture(){return textures[activeTexture];}
+    int originalActiveTexture(){return activeTexture;}
     private void texture(int unit,int texture){textures[unit]=texture;GL13C.glActiveTexture(GL13C.GL_TEXTURE0+unit);GL11C.glBindTexture(GL11C.GL_TEXTURE_2D,texture);rememberTexture(texture);}
     void bindTexture(int target,int texture){if(target!=GL11C.GL_TEXTURE_2D)throw new IllegalArgumentException("Game texture target");final int unit=activeTexture;set("texture/"+unit,0x40000,()->texture(unit,texture));}
     void textureParameter(int target,int parameter,int value) {
@@ -122,16 +125,30 @@ final class GameRasterState {
         for(int unit=0;unit<2;unit++)if((substituted&(1<<unit))!=0){GL13C.glActiveTexture(GL13C.GL_TEXTURE0+unit);GL11C.glBindTexture(GL11C.GL_TEXTURE_2D,textures[unit]);}
         substituted=0;GL13C.glActiveTexture(GL13C.GL_TEXTURE0+activeTexture);
     }
+    /** A queued singleton may precede a later logical texture bind. Its original
+     * primary sampler is scoped inside beginSamplers/endSamplers, without changing
+     * the logical binding or using a driver query. */
+    boolean beginOriginalTexture(int texture) {
+        if(activeTexture!=0)throw new IllegalStateException("Original primary texture outside unit zero");
+        int wanted=texture==0?whiteTexture:texture,current=textures[0]==0?whiteTexture:textures[0];
+        if(wanted==current)return false;
+        GL11C.glBindTexture(GL11C.GL_TEXTURE_2D,wanted);return true;
+    }
+    void endOriginalTexture(){GL11C.glBindTexture(GL11C.GL_TEXTURE_2D,textures[0]==0?whiteTexture:textures[0]);}
     /** Extra units are scoped around one terrain pass, separate from the game's four logical units.
      * No image copying, texture-parameter changes or persistent ownership of external texture names. */
     void chunkTextures(int[] table) {
-        if(table.length!=GameChunkTextures.SIZE)throw new IllegalArgumentException("Chunk texture table");
+        chunkTextures(table,GameChunkTextures.SIZE);
+    }
+    void chunkTextures(int[] table,int used) {
+        if(table.length!=GameChunkTextures.SIZE||used<1||used>table.length)throw new IllegalArgumentException("Chunk texture table");
+        if(savedChunkTextures!=null&&savedChunkTextures.length<used)endChunkTextures();
         if(savedChunkTextures==null){
-            savedChunkTextures=new int[GameChunkTextures.SIZE];chunkTextureBindings=new int[GameChunkTextures.SIZE];
-            for(int i=0;i<table.length;i++){GL13C.glActiveTexture(GL13C.GL_TEXTURE0+4+i);savedChunkTextures[i]=chunkTextureBindings[i]=GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D);}
+            savedChunkTextures=new int[used];chunkTextureBindings=new int[used];
+            for(int i=0;i<used;i++){GL13C.glActiveTexture(GL13C.GL_TEXTURE0+4+i);savedChunkTextures[i]=chunkTextureBindings[i]=GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D);}
         }
         try{
-            for(int i=0;i<table.length;i++){
+            for(int i=0;i<used;i++){
                 int texture=table[i]<=0?whiteTexture:table[i];
                 if(chunkTextureBindings[i]!=texture){GL13C.glActiveTexture(GL13C.GL_TEXTURE0+4+i);GL11C.glBindTexture(GL11C.GL_TEXTURE_2D,texture);chunkTextureBindings[i]=texture;}
             }

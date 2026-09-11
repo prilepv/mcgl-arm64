@@ -19,6 +19,7 @@ public final class GenerateGameBridge {
                 .append("    long transientMeshCreations();\n    int transientMeshCount();\n    long transientMeshBytes();\n")
                 .append("    void beginChunk(int handle, int x, int y, int z, int passes);\n    void finishChunk();\n    void abortChunk();\n")
                 .append("    void beginOriginalChunk(int handle, int passes);\n    void finishOriginalChunk();\n    void abortOriginalChunk();\n")
+                .append("    int beginOriginalTerrain();\n    void endOriginalTerrain(int scope);\n")
                 .append("    void defineFontGlyphs(int first, int count);\n    int beginText();\n    void endText(int scope);\n    void abortText(int scope);\n    long textGlyphs();\n    long textDraws();\n")
                 .append("    long terrainBatchParts();\n    long terrainBatches();\n    long terrainArenaBytes();\n    int terrainArenaPages();\n    int terrainArenaMembers();\n    long terrainArenaCreations();\n")
                 .append("    int terrainPendingRecoveries();\n    long terrainRecoveries();\n    long terrainRecoveryBytes();\n")
@@ -48,6 +49,8 @@ public final class GenerateGameBridge {
                 .append("    public void beginOriginalChunk(int h, int p) { context.checkOwner(); target.beginOriginalChunk(h,p); }\n")
                 .append("    public void finishOriginalChunk() { context.checkOwner(); target.finishOriginalChunk(); }\n")
                 .append("    public void abortOriginalChunk() { context.checkOwner(); target.abortOriginalChunk(); }\n")
+                .append("    public int beginOriginalTerrain() { context.checkOwner(); return target.beginOriginalTerrain(); }\n")
+                .append("    public void endOriginalTerrain(int scope) { context.checkOwner(); target.endOriginalTerrain(scope); }\n")
                 .append("    public void defineFontGlyphs(int first, int count) { context.checkOwner(); target.defineFontGlyphs(first,count); }\n")
                 .append("    public int beginText() { context.checkOwner(); return target.beginText(); }\n")
                 .append("    public void endText(int scope) { context.checkOwner(); target.endText(scope); }\n")
@@ -106,8 +109,9 @@ public final class GenerateGameBridge {
                     case "GL15":nativeOwner="GL15C";break;
                     default:throw new IOException("Unaudited native family: "+command.family);
                 }
-                commands.append("    public ").append(result).append(' ').append(target).append('(').append(parameters).append(") { flushText(); ")
-                        .append(returns).append("org.lwjgl.opengl.").append(nativeOwner).append('.').append(nativeName).append('(').append(arguments).append("); }\n");
+                commands.append("    public ").append(result).append(' ').append(target).append('(').append(parameters).append(") { flushExternal(); ");
+                if(nativeName.equals("glFramebufferTexture2D"))commands.append("originalTextureRenderTarget(p3); ");
+                commands.append(returns).append("org.lwjgl.opengl.").append(nativeOwner).append('.').append(nativeName).append('(').append(arguments).append("); }\n");
             }
             count++;
         }

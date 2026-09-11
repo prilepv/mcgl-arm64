@@ -16,47 +16,46 @@ public final class GameGeometry {
     public final int attributeMask;
     private GameGeometry(VertexLayout layout, ByteBuffer data, int vertices, int mode, int attributes) {
         int[] indices = indices(mode, vertices);
-        if(mode>=1&&mode<=3) {
-            // macOS forward-compatible Core rejects native widths above one. Each segment becomes
-            // a four-corner strip; the shader applies its pixel width after projection at draw time.
-            int stride=layout.stride()+20,count=Math.multiplyExact(indices.length,2);
-            List<VertexLayout.Attribute> fields=new ArrayList<VertexLayout.Attribute>(layout.attributes());
-            fields.add(a(9,3,VertexLayout.Storage.FLOAT32,false,layout.stride()));
-            fields.add(a(10,2,VertexLayout.Storage.FLOAT32,false,layout.stride()+12));
-            ByteBuffer expanded=ByteBuffer.allocateDirect(Math.multiplyExact(count,stride)).order(ByteOrder.nativeOrder());
-            for(int segment=0;segment<indices.length/2;segment++)for(int corner=0;corner<4;corner++) {
-                int end=corner<2?0:1,vertex=indices[segment*2+end],other=indices[segment*2+1-end];
-                copy(data,vertex*layout.stride(),expanded,layout.stride());copy(data,other*layout.stride(),expanded,12);
-                expanded.putFloat(corner==0||corner==3?1:-1).putFloat(end==0?1:-1);
-            }
-            expanded.flip();data=expanded;layout=new VertexLayout(stride,fields.toArray(new VertexLayout.Attribute[0]));
-            mode=7;vertices=count;indices=indices(mode,count);attributes|=512;
-        }
+        boolean lines = mode >= 1 && mode <= 3;
         primitive = mode == 0 ? Mesh.Primitive.POINTS : Mesh.Primitive.TRIANGLES;
         // Quad triangulation keeps the original diagonal. Extra flat inputs carry the fourth vertex's
         // color/normal to BOTH triangles without changing interpolated UVs or smooth AO colors.
-        if (mode == 7 || mode == 8) {
+        if (mode == 7 || mode == 8 || lines) {
             VertexLayout.Attribute color = null, normal = null;
             for (VertexLayout.Attribute attr : layout.attributes()) {
                 if (attr.location == 1) color = attr; if (attr.location == 4) normal = attr;
             }
             int colorBytes = color.components * color.storage.bytes, normalBytes = normal.components * normal.storage.bytes;
-            int normalOffset = layout.stride() + colorBytes;
+            int baseStride = layout.stride() + (lines ? 20 : 0);
+            int normalOffset = baseStride + colorBytes;
             int flatMaskOffset = (normalOffset + normalBytes + 3) / 4 * 4;
             boolean vertexMasks = (attributes & 128) != 0;
             int stride = flatMaskOffset + (vertexMasks ? 4 : 0);
             List<VertexLayout.Attribute> fields = new ArrayList<VertexLayout.Attribute>(layout.attributes());
-            fields.add(a(5, color.components, color.storage, color.normalized, layout.stride()));
+            if (lines) {
+                // Core line corners and their flat last-endpoint inputs are expanded together.
+                // The shader still applies the original pixel width after projection.
+                fields.add(a(9, 3, VertexLayout.Storage.FLOAT32, false, layout.stride()));
+                fields.add(a(10, 2, VertexLayout.Storage.FLOAT32, false, layout.stride() + 12));
+            }
+            fields.add(a(5, color.components, color.storage, color.normalized, baseStride));
             fields.add(a(6, normal.components, normal.storage, normal.normalized, normalOffset));
             if (vertexMasks) fields.add(a(8, 1, VertexLayout.Storage.FLOAT32, false, flatMaskOffset));
             // QUAD_STRIP shares vertices across faces: expand the quad sequence before attaching flat values.
-            int count = mode == 7 ? vertices : Math.max(0, (vertices / 2 - 1) * 4);
+            int count = lines ? Math.multiplyExact(indices.length, 2)
+                    : mode == 7 ? vertices : Math.max(0, (vertices / 2 - 1) * 4);
             ByteBuffer expanded = ByteBuffer.allocateDirect(Math.multiplyExact(count, stride)).order(ByteOrder.nativeOrder());
             for (int v = 0; v < count; v++) {
                 int face = v / 4, corner = v % 4;
-                int original = mode == 7 ? v : face * 2 + (corner == 0 ? 0 : corner == 1 ? 1 : corner == 2 ? 3 : 2);
-                int provoking = mode == 7 ? face * 4 + 3 : face * 2 + 3;
+                int end = corner < 2 ? 0 : 1;
+                int original = lines ? indices[face * 2 + end]
+                        : mode == 7 ? v : face * 2 + (corner == 0 ? 0 : corner == 1 ? 1 : corner == 2 ? 3 : 2);
+                int provoking = lines ? indices[face * 2 + 1] : mode == 7 ? face * 4 + 3 : face * 2 + 3;
                 copy(data, original * layout.stride(), expanded, layout.stride());
+                if (lines) {
+                    copy(data, indices[face * 2 + 1 - end] * layout.stride(), expanded, 12);
+                    expanded.putFloat(corner == 0 || corner == 3 ? 1 : -1).putFloat(end == 0 ? 1 : -1);
+                }
                 copy(data, provoking * layout.stride() + color.offset, expanded, colorBytes);
                 copy(data, provoking * layout.stride() + normal.offset, expanded, normalBytes);
                 while (expanded.position() % stride < flatMaskOffset && expanded.position() % stride != 0) expanded.put((byte)0);
@@ -64,12 +63,17 @@ public final class GameGeometry {
                 while (expanded.position() % stride != 0) expanded.put((byte)0);
             }
             expanded.flip(); data = expanded; layout = new VertexLayout(stride, fields.toArray(new VertexLayout.Attribute[0]));
-            indices = indices(7, count); attributes |= 32 | 64 | (vertexMasks ? 256 : 0);
+            indices = indices(7, count); attributes |= 32 | 64 | (vertexMasks ? 256 : 0) | (lines ? 512 : 0);
         }
         attributeMask = attributes; mesh = new MeshData(layout, data, IndexData.of(indices));
     }
     private static void copy(ByteBuffer source, int offset, ByteBuffer target, int count) {
-        for (int i = 0; i < count; i++) target.put(source.get(source.position() + offset + i));
+        // Both public producers require native-order buffers. Word copies preserve every
+        // byte (including packed normals/colors) without allocating per-vertex views.
+        int at = source.position() + offset, end = at + count;
+        for (; at <= end - 8; at += 8) target.putLong(source.getLong(at));
+        if (at <= end - 4) { target.putInt(source.getInt(at)); at += 4; }
+        for (; at < end; at++) target.put(source.get(at));
     }
     private static VertexLayout.Attribute a(int location, int count, VertexLayout.Storage storage, boolean normalized, int offset) {
         return new VertexLayout.Attribute(location, count, storage, normalized, offset);

@@ -41,8 +41,11 @@ public final class OriginalChunkAdapterTest implements Opcodes {
             }
             for(String className:new String[]{world,"net/A/U/thisclass","net/A/U/o0oOo"}) {
                 ClassNode old=type(read(before,className+".class")),next=type(read(after,className+".class"));
-                check(old.methods.size()==next.methods.size(),"no replaced scheduler/region/comparator methods");
-                for(MethodNode m:old.methods)equivalent(m,method(next,m.name,m.desc),manifest,className+" "+m.name+m.desc);
+                check(old.methods.size()+(className.equals(world)?1:0)==next.methods.size(),"only world submission scope added; no replaced scheduler/region/comparator methods");
+                for(MethodNode m:old.methods){
+                    String name=className.equals(world)&&m.name.equals("o00000")&&m.desc.equals("(ID)V")?"mcglDrawOriginalTerrainBody":m.name;
+                    equivalent(m,method(next,name,m.desc),manifest,className+" "+m.name+m.desc);
+                }
             }
             MethodNode rebuild=method(chunk,"Ö00000","()V"),resort=method(chunk,"Õ00000","()V");
             for(MethodNode m:new MethodNode[]{rebuild,resort}) {
@@ -51,8 +54,11 @@ public final class OriginalChunkAdapterTest implements Opcodes {
             }
             check(calls(method(chunk,"mcglRebuildOriginalBody","()V"),"Õ00000")==1,"original CPU transparency snapshot retained");
             check(calls(method(chunk,"mcglResortOriginalBody","()V"),"Ó00000")==1,"actual original per-chunk sorter retained in resort body");
-            check(calls(method(type(read(after,world+".class")),"o00000","(ID)V"),"Õ00000")==1,"original one-chunk resort queue retained");
-            check(calls(method(type(read(after,world+".class")),"o00000","(ID)V"),"drawChunks")==0,"global face pipeline is not used by control world");
+            ClassNode nextWorld=type(read(after,world+".class"));
+            MethodNode worldBody=method(nextWorld,"mcglDrawOriginalTerrainBody","(ID)V"),worldWrapper=method(nextWorld,"o00000","(ID)V");
+            check(calls(worldBody,"Õ00000")==1,"original one-chunk resort queue retained");
+            check(calls(worldBody,"drawChunks")==0,"global face pipeline is not used by control world");
+            check(calls(worldWrapper,"beginOriginalTerrain")==1&&calls(worldWrapper,"endOriginalTerrain")==2&&calls(worldWrapper,"mcglDrawOriginalTerrainBody")==1&&worldWrapper.tryCatchBlocks.size()==1,"balanced original terrain wrapper with exceptional cleanup");
             check(calls(method(type(read(after,tess+".class")),"new","()I"),"raw")==1,"same indexed Core accumulator drain");
         }
         Path root=Paths.get(args[3]);Files.createDirectories(root);

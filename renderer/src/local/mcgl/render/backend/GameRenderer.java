@@ -18,7 +18,7 @@ public class GameRenderer {
     private int compilingName, nextName = 1, callDepth, clientTexture;
     private int terrainReplayDepth;
     private Immediate immediate;
-    private ShaderProgram material,chunkMaterial,effect,boundProgram;
+    private ShaderProgram material,chunkMaterial,effect,boundProgram,unlitMaterial,unlitChunkMaterial;
     private final Set<ShaderProgram> chunkTexturePrograms=Collections.newSetFromMap(new WeakHashMap<ShaderProgram,Boolean>());
     private GameChunks chunks;
     private final GameDynamicMeshes dynamicMeshes;
@@ -61,8 +61,8 @@ public class GameRenderer {
     public final long terrainRecoveries(){return terrainBatch==null?0:terrainBatch.recoveries();}
     public final long terrainRecoveryBytes(){return terrainBatch==null?0:terrainBatch.recoveryBytes();}
     /** Called after native context destruction. No native operation or producer data retained. */
-    public final void abandon() { if(chunks!=null)chunks.abandon();chunks=null;dynamicMeshes.abandon();if(text!=null)text.abandon();text=null;textDepth=0;textImmediate=null;if(terrainBatch!=null)terrainBatch.abandon();terrainBatch=null;terrainBatchDepth=0;fontGlyphNames.clear();models.clear(); attributes.clear();chunkTexturePrograms.clear(); compiling=null;originalChunk=null;immediate=null;material=null;chunkMaterial=null;effect=null;boundProgram=null; }
-    public final void selectEffect(ShaderProgram value) { check(); outsideBegin();flushText(); effect=value; }
+    public final void abandon() { if(chunks!=null)chunks.abandon();chunks=null;dynamicMeshes.abandon();if(text!=null)text.abandon();text=null;textDepth=0;textImmediate=null;if(terrainBatch!=null)terrainBatch.abandon();terrainBatch=null;terrainBatchDepth=0;fontGlyphNames.clear();models.clear(); attributes.clear();chunkTexturePrograms.clear();originalRenderTargets.clear();compiling=null;originalChunk=null;immediate=null;material=null;chunkMaterial=null;unlitMaterial=null;unlitChunkMaterial=null;effect=null;boundProgram=null; }
+    public final void selectEffect(ShaderProgram value) { check(); outsideBegin();flushExternal(); effect=value; }
     protected final boolean record(Runnable operation) {
         flushText();
         return record(operation, false, -1);
@@ -76,7 +76,18 @@ public class GameRenderer {
     private boolean record(Runnable operation, boolean matrix, int groups,boolean batchSafeMatrix) {
         outsideBegin(); if (compiling == null || replayingMatrices) return false;
         if (compiling.operations.size() >= 1024 * 1024) throw new IllegalStateException("Oversized game model command group");
-        compiling.operations.add(new Action(operation, matrix, groups,batchSafeMatrix)); return true;
+        appendOperation(new Action(operation, matrix, groups,batchSafeMatrix)); return true;
+    }
+    private void finishModelBatch() {
+        if (compiling != null && compiling.pendingGeometry != null) {
+            compiling.pendingGeometry.finish();
+            compiling.pendingGeometry = null;
+        }
+    }
+    private void appendOperation(Operation operation) {
+        // Every recorded input, transform, state change and nested list is a barrier.
+        finishModelBatch();
+        compiling.operations.add(operation);
     }
     private void outsideBegin() { if (immediate != null) throw new IllegalStateException("State operation inside a begun game primitive"); }
     interface Operation { void draw(); void close(); default boolean matrix() { return false; } default boolean batchSafeMatrix(){return false;} default int groups() { return -1; } default int batchDepthMask(){return -2;} default int batchTexture(){return -1;} default int batchCapability(){return 0;} }
@@ -96,10 +107,32 @@ public class GameRenderer {
         public void replace(Mesh replacement){Mesh previous=mesh;previous.close();mesh=replacement;}
         public void close(){if(terrainBatch!=null)terrainBatch.retiring(this);mesh.close();}
     }
+    private final class ModelDraw implements Operation {
+        private GameModelBatch pending = new GameModelBatch();
+        private Mesh mesh;
+        private final Mesh.Primitive primitive;
+        private final int mask;
+        ModelDraw(GameGeometry geometry) {
+            if (!pending.append(geometry)) throw new IllegalArgumentException("Oversized model run");
+            primitive = pending.primitive(); mask = pending.mask();
+        }
+        boolean append(GameGeometry geometry) { return pending != null && pending.append(geometry); }
+        void finish() {
+            if (pending == null) return;
+            mesh = context.meshes().create("game/model-run", pending.meshData(), MeshPipeline.Usage.STATIC);
+            pending = null; // The published model owns only its GPU mesh.
+        }
+        public void draw() {
+            if (mesh == null) throw new IllegalStateException("Unfinished model geometry run");
+            drawMesh(mesh, primitive, mask);
+        }
+        public void close() { pending = null; if (mesh != null) { mesh.close(); mesh = null; } }
+    }
     private static final class Model {
         final List<Operation> operations=new ArrayList<Operation>();
-        int terrainOwner;boolean fontGlyph;
-        void close(){for(Operation op:operations)op.close();operations.clear();}
+        int terrainOwner;boolean fontGlyph,mergeGeometry;
+        ModelDraw pendingGeometry;
+        void close(){for(Operation op:operations)op.close();operations.clear();pendingGeometry=null;}
     }
     /** A declared original font glyph keeps only its logical xy/z/uv description, not a world/model vertex shadow.
      * Its standalone GPU representation is allocated only if an incompatible text effect needs it. */
@@ -141,6 +174,9 @@ public class GameRenderer {
         try{flushText();}finally{if(text!=null)text.discard();textDepth--;}
     }
     protected final void flushText(){flushTerrain();if(text!=null)text.flush();}
+    /** Native interop/queries may observe or change spare texture units. Return
+     * their exact entry bindings before crossing that boundary. */
+    protected final void flushExternal(){try{flushText();}finally{raster.endChunkTextures();if(terrainBatch!=null)terrainBatch.endArrays();}}
     private void flushTerrain(){if(terrainBatch!=null)terrainBatch.flush();}
     private boolean pendingTerrain(){return terrainBatch!=null&&terrainBatch.pending();}
     private GameTerrainBatch terrainBatch(){if(terrainBatch==null)terrainBatch=new GameTerrainBatch(this,context);return terrainBatch;}
@@ -156,10 +192,34 @@ public class GameRenderer {
     void drawTerrainSingle(Mesh mesh,Mesh.Primitive primitive,int mask,double[] matrix){
         bind(mask,matrix);try{mesh.draw(primitive,0,mesh.indexCount());originalChunkDraws++;vertices+=mesh.vertexCount();}finally{endSamplers();}
     }
+    void drawTerrainSingle(Mesh mesh,Mesh.Primitive primitive,int mask,double[] matrix,int texture){
+        bind(mask,matrix);
+        try{
+            boolean changed=raster.beginOriginalTexture(texture);
+            try{mesh.draw(primitive,0,mesh.indexCount());originalChunkDraws++;vertices+=mesh.vertexCount();}
+            finally{if(changed)raster.endOriginalTexture();}
+        }finally{endSamplers();}
+    }
     void drawTerrainBatch(MeshArena arena,List<Mesh> meshes,Mesh.Primitive primitive,int mask,ShaderProgram program,FloatBuffer matrices,long count){
         state.bind(program,mask);program.uniform("uOriginalModelPalette").setMatrix4Array(matrices);program.bind();boundProgram=program;raster.beginSamplers();
         try{arena.draw(primitive,meshes);originalChunkDraws++;vertices+=count;}finally{raster.endSamplers();}
     }
+    boolean originalMaterialsEligible(){return state.activeUnit()==0&&raster.texture()>=0&&effect==null&&!state.enabled(2896);}
+    int originalTexture(){return raster.texture();}
+    void drawTerrainMaterials(MeshArena arena,List<Mesh> meshes,Mesh.Primitive primitive,ShaderProgram program,
+                              FloatBuffer matrices,IntBuffer inputs,int[] textures,int textureCount,long count){
+        state.bind(program,0);program.uniform("uOriginalModelPalette").setMatrix4Array(matrices);
+        program.uniform("uOriginalInputPalette").setIntArray(inputs);uniformInt(program,"uOriginalTextureCount",textureCount);program.bind();boundProgram=program;raster.beginSamplers();
+        try{bindChunkTextures(textures,2);arena.draw(primitive,meshes);originalChunkDraws++;vertices+=count;}
+        finally{raster.endSamplers();}
+    }
+    void drawTerrainArray(MeshArena arena,List<Mesh> meshes,Mesh.Primitive primitive,ShaderProgram program,FloatBuffer matrices,IntBuffer inputs,GameTextureArrays arrays,GameTextureArrays.Page page,long count){
+        state.bind(program,0);program.uniform("uOriginalModelPalette").setMatrix4Array(matrices);program.uniform("uOriginalInputPalette").setIntArray(inputs);program.uniform("uOriginalTextureArray").setInt(GameTextureArrays.UNIT);program.bind();boundProgram=program;raster.beginSamplers();
+        try{arrays.bind(page);arena.draw(primitive,meshes);originalChunkDraws++;vertices+=count;}finally{raster.endSamplers();}
+    }
+    private final Set<Integer> originalRenderTargets=new HashSet<Integer>();
+    protected final void originalTextureRenderTarget(int texture){if(texture>0)originalRenderTargets.add(texture);if(terrainBatch!=null)terrainBatch.textureRenderTarget(texture);}
+    GameTextureArrays createTextureArrays(){GameTextureArrays result=new GameTextureArrays(raster);for(int texture:originalRenderTargets)result.renderTarget(texture);return result;}
     /** The original chunk algorithms compile independently owned Core model ranges.
      * Replacement is atomic across the original passes; no global face plan or camera repacking. */
     private final class OriginalChunk {
@@ -176,12 +236,20 @@ public class GameRenderer {
     void bind(int mask) {
         bind(mask,null);
     }
+    static boolean unlitShaders(){return Boolean.parseBoolean(System.getProperty("mcgl.graphics.unlitShaders","true"));}
     private void bind(int mask,double[] originalModel) {
         ShaderProgram program=effect;
+        boolean unlit=unlitShaders()&&!state.enabled(2896);
         if((mask&2048)!=0){
-            if(program==null){if(chunkMaterial==null||chunkMaterial.isClosed())chunkMaterial=context.shaders().create(GameMaterialProgram.sources(true));program=chunkMaterial;}
+            if(program==null){
+                if(unlit){if(unlitChunkMaterial==null||unlitChunkMaterial.isClosed())unlitChunkMaterial=context.shaders().create(GameMaterialProgram.unlitSources(true));program=unlitChunkMaterial;}
+                else{if(chunkMaterial==null||chunkMaterial.isClosed())chunkMaterial=context.shaders().create(GameMaterialProgram.sources(true));program=chunkMaterial;}
+            }
             else{program=GameEffect.chunkProgram(program);if(program==null)throw new IllegalStateException("Effect has no chunk texture variant");}
-        }else if(program==null){if(material==null||material.isClosed())material=context.shaders().create(GameMaterialProgram.sources());program=material;}
+        }else if(program==null){
+            if(unlit){if(unlitMaterial==null||unlitMaterial.isClosed())unlitMaterial=context.shaders().create(GameMaterialProgram.unlitSources(false));program=unlitMaterial;}
+            else{if(material==null||material.isClosed())material=context.shaders().create(GameMaterialProgram.sources());program=material;}
+        }
         state.bind(program,mask,originalModel);
         if((mask&512)!=0) {
             ShaderUniform width=program.findUniform("uGameLineWidth"),viewport=program.findUniform("uGameViewport");
@@ -198,7 +266,10 @@ public class GameRenderer {
     }
     boolean chunkTexturesSupported(){return state.activeUnit()==0&&(effect==null||GameEffect.chunkTexturesSupported(effect));}
     void bindChunkTextures(int[] textures){
-        raster.chunkTextures(textures);
+        bindChunkTextures(textures,GameChunkTextures.SIZE);
+    }
+    private void bindChunkTextures(int[] textures,int used){
+        raster.chunkTextures(textures,used);
         ShaderProgram program=boundProgram;
         if(chunkTexturePrograms.add(program)){
             for(int i=1;i<=GameChunkTextures.SIZE;i++)uniformInt(program,"uGameChunkTexture"+i,3+i);
@@ -211,8 +282,18 @@ public class GameRenderer {
         if(chunks!=null&&chunks.building())throw new IllegalStateException("Unexpected immediate/model geometry inside a terrain rebuild");
         if(geometry.mesh.indices().count()==0)return;
         if(compiling==null){Mesh reused=dynamicMeshes.acquire(geometry.mesh);if(reused!=null){drawMesh(reused,geometry.primitive,geometry.attributeMask);return;}}
+        if (compiling != null && compiling.mergeGeometry && GameModelBatch.eligible(geometry)) {
+            if (compiling.pendingGeometry == null || !compiling.pendingGeometry.append(geometry)) {
+                finishModelBatch();
+                ModelDraw next = new ModelDraw(geometry);
+                compiling.operations.add(next); compiling.pendingGeometry = next;
+            }
+            return;
+        }
+        // Seal before allocating an ordinary fallback, so failed uploads leave no unowned mesh.
+        finishModelBatch();
         Draw draw=new Draw(geometry,compiling==null?MeshPipeline.Usage.STREAM:MeshPipeline.Usage.STATIC);
-        if(compiling!=null)compiling.operations.add(draw);
+        if(compiling!=null)appendOperation(draw);
         else try{draw.draw();}finally{draw.close();}
     }
     private void drawMesh(Mesh mesh,Mesh.Primitive primitive,int mask) {
@@ -230,7 +311,7 @@ public class GameRenderer {
         if(compiling!=null&&compiling.fontGlyph&&words==32&&count==4&&mode==7&&!converted&&begun&&!color&&texture&&!light&&!normals) {
             if(data==null||data.length<32)throw new IllegalArgumentException("Incomplete font glyph");
             for(int v=0;v<4;v++)for(int i=0;i<5;i++)if(!Float.isFinite(Float.intBitsToFloat(data[v*8+i])))throw new IllegalArgumentException("Non-finite font glyph");
-            compiling.operations.add(new Glyph(data));rawBatches++;return 128;
+            appendOperation(new Glyph(data));rawBatches++;return 128;
         }
         flushText();GameGeometry geometry=GameGeometry.raw(data,words,count,mode,converted,begun,color,texture,light,normals);
         submit(geometry);rawBatches++;return Math.multiplyExact(words,4);
@@ -246,9 +327,14 @@ public class GameRenderer {
         if(chunks!=null&&chunks.building())chunks.beginPass(name);
         compilingName=name;compiling=new Model();compiling.fontGlyph=fontGlyphNames.contains(name);
         if(originalChunk!=null)compiling.terrainOwner=originalChunk.first;
+        // The switch is read only during compilation for account-free A/B tests.
+        // Original terrain, the alternate chunk pipeline and font glyphs retain their own paths.
+        compiling.mergeGeometry = !terrain && originalChunk == null && (chunks == null || !chunks.building())
+                && !compiling.fontGlyph && !"false".equals(System.getProperty("mcgl.model.batch"));
     }
     public void glEndList() {
         outsideBegin();if(compiling==null)throw new IllegalStateException("No game model is being compiled");
+        finishModelBatch();
         if(chunks!=null&&chunks.building()) { chunks.endPass(compilingName);compiling=null;compilingName=0;return; }
         if(originalChunk!=null){Model old=originalChunk.pending.put(compilingName,compiling);compiling=null;compilingName=0;if(old!=null)old.close();return;}
         Model old=compiling.operations.isEmpty()?models.remove(compilingName):models.put(compilingName,compiling);compiling=null;compilingName=0;if(old!=null)old.close();
@@ -268,11 +354,29 @@ public class GameRenderer {
     public void glCallLists(IntBuffer names) {
         if(names==null)throw new NullPointerException("model handles");
         if(compiling!=null||!terrainBatchEnabled){for(int i=names.position();i<names.limit();i++)glCallList(names.get(i));return;}
+        int scope=beginOriginalTerrain();
+        try{for(int i=names.position();i<names.limit();i++)glCallList(names.get(i));}
+        finally{endOriginalTerrain(scope);}
+    }
+    /** A submission scope around the unchanged original world draw. The alpha-sort
+     * branch calls individual lists under per-chunk camera transforms, not glCallLists.
+     * Capture those matrices in the same ordered palette without changing selection,
+     * resorting, pass replay, or the existing state/effect barriers. */
+    public int beginOriginalTerrain() {
+        check();outsideBegin();
+        if(compiling!=null||!terrainBatchEnabled)return 0;
         if(terrainBatchDepth==64)throw new IllegalStateException("Terrain list scope overflow");
         if(terrainBatchDepth==0&&callDepth==0&&originalChunk==null&&terrainBatch!=null)terrainBatch.recover();
-        terrainBatchDepth++;
-        try{for(int i=names.position();i<names.limit();i++)glCallList(names.get(i));}
-        finally{try{if(terrainBatchDepth==1)flushTerrain();}finally{terrainBatchDepth--;}}
+        // Read only at an outer scope boundary, permitting same-context A/B tests.
+        if(terrainBatchDepth==0&&terrainBatch!=null)terrainBatch.materialTables(!"false".equals(System.getProperty("mcgl.terrain.materials")));
+        return ++terrainBatchDepth;
+    }
+    /** Also used by the world's finally block: submit the completed prefix on
+     * failure, and release the scope even if a driver submission itself fails. */
+    public void endOriginalTerrain(int scope) {
+        check();if(scope==0)return;
+        if(scope!=terrainBatchDepth)throw new IllegalStateException("Mismatched terrain list scope");
+        try{if(scope==1)flushTerrain();}finally{try{if(scope==1){raster.endChunkTextures();if(terrainBatch!=null)terrainBatch.endArrays();}}finally{terrainBatchDepth--;}}
     }
     public void glDeleteLists(int first,int count) {
         outsideBegin();flushText();if(count<0)throw new IllegalArgumentException("Negative model range");if(count==0)return;
@@ -352,7 +456,7 @@ public class GameRenderer {
         outsideBegin();final int groups=batchCapabilityGroup(capability);
         if(compiling!=null&&!replayingMatrices&&groups!=-1){
             if(compiling.operations.size()>=1024*1024)throw new IllegalStateException("Oversized game model command group");
-            compiling.operations.add(new Operation(){public void draw(){enable(capability,on);}public void close(){}public int groups(){return groups;}public int batchCapability(){return on?capability:-capability;}});return;
+            appendOperation(new Operation(){public void draw(){enable(capability,on);}public void close(){}public int groups(){return groups;}public int batchCapability(){return on?capability:-capability;}});return;
         }
         if(pendingTerrain()&&capability!=2903&&(GameRenderState.materialCapability(capability)?state.enabled(capability):raster.enabled(capability))==on){if(GameRenderState.materialCapability(capability))state.enable(capability,on);else raster.enable(capability,on);return;}
         if(record(()->enable(capability,on)))return;if(GameRenderState.materialCapability(capability))state.enable(capability,on);else raster.enable(capability,on);
@@ -369,8 +473,8 @@ public class GameRenderer {
             default:try{return GameRasterState.enableGroup(capability);}catch(IllegalArgumentException unsupported){return -1;}
         }
     }
-    public boolean glIsEnabled(int capability){outsideBegin();if(GameRenderState.materialCapability(capability))return state.enabled(capability);flushText();return GL11C.glIsEnabled(capability);}
-    public boolean glGetBoolean(int parameter){outsideBegin();if(GameRenderState.materialCapability(parameter))return state.enabled(parameter);flushText();return GL11C.glGetBoolean(parameter);}
+    public boolean glIsEnabled(int capability){outsideBegin();if(GameRenderState.materialCapability(capability))return state.enabled(capability);flushExternal();return GL11C.glIsEnabled(capability);}
+    public boolean glGetBoolean(int parameter){outsideBegin();if(GameRenderState.materialCapability(parameter))return state.enabled(parameter);flushExternal();return GL11C.glGetBoolean(parameter);}
     public void glAlphaFunc(int function,float reference){if(record(()->glAlphaFunc(function,reference)))return;state.alpha(function,reference);}
     public void glShadeModel(int mode){if(record(()->glShadeModel(mode)))return;state.shade(mode);}
     public void glColorMaterial(int face,int mode){if(record(()->glColorMaterial(face,mode)))return;state.colorMaterial(face,mode);}
@@ -392,39 +496,41 @@ public class GameRenderer {
         outsideBegin();
         if(compiling!=null&&!replayingMatrices){
             if(compiling.operations.size()>=1024*1024)throw new IllegalStateException("Oversized game model command group");
-            compiling.operations.add(new Operation(){public void draw(){glBindTexture(target,texture);}public void close(){}public int groups(){return 0x40000;}public int batchTexture(){return target==3553&&texture>=0?texture:-1;}});return;
+            appendOperation(new Operation(){public void draw(){glBindTexture(target,texture);}public void close(){}public int groups(){return 0x40000;}public int batchTexture(){return target==3553&&texture>=0?texture:-1;}});return;
         }
-        if(!pendingTerrain()||target!=3553||raster.texture()!=texture)flushText();raster.bindTexture(target,texture);
+        if(!pendingTerrain()||target!=3553||(raster.texture()!=texture&&!terrainBatch.acceptsTextureBind(target,texture)))flushText();raster.bindTexture(target,texture);
     }
     public int glGenTextures(){outsideBegin();return GL11C.glGenTextures();}
     public void glGenTextures(IntBuffer textures){outsideBegin();GL11C.glGenTextures(textures);}
-    public void glDeleteTextures(int texture){outsideBegin();flushText();raster.deleteTexture(texture);}
-    public void glDeleteTextures(IntBuffer textures){outsideBegin();flushText();for(int i=textures.position();i<textures.limit();i++)raster.deleteTexture(textures.get(i));}
+    public void glDeleteTextures(int texture){outsideBegin();flushExternal();originalRenderTargets.remove(texture);if(terrainBatch!=null)terrainBatch.textureDeleted(texture);raster.deleteTexture(texture);}
+    public void glDeleteTextures(IntBuffer textures){outsideBegin();flushExternal();for(int i=textures.position();i<textures.limit();i++){originalRenderTargets.remove(textures.get(i));if(terrainBatch!=null)terrainBatch.textureDeleted(textures.get(i));raster.deleteTexture(textures.get(i));}}
     public void glTexParameteri(int target,int parameter,int value){if(record(()->glTexParameteri(target,parameter,value)))return;raster.textureParameter(target,parameter,value);}
     public void glTexEnvi(int target,int parameter,int value){if(record(()->glTexEnvi(target,parameter,value)))return;if(target!=8960||parameter!=8704||value!=8448)throw new IllegalArgumentException("Unsupported texture combine operation");}
     public void glTexImage2D(int target,int level,int internal,int width,int height,int border,int format,int type,ByteBuffer pixels) {
         if(compiling!=null){final ByteBuffer copy=copy(pixels);if(record(()->glTexImage2D(target,level,internal,width,height,border,format,type,copy)))return;}
-        outsideBegin();flushText();GL11C.glTexImage2D(target,level,internal==3?GL11C.GL_RGB8:internal==4?GL11C.GL_RGBA8:internal,width,height,border,format,type,pixels);
+        outsideBegin();flushExternal();GL11C.glTexImage2D(target,level,internal==3?GL11C.GL_RGB8:internal==4?GL11C.GL_RGBA8:internal,width,height,border,format,type,pixels);
+        if(terrainBatch!=null&&target==3553)terrainBatch.textureReplaced(raster.originalBoundTexture());
     }
     public void glTexSubImage2D(int target,int level,int x,int y,int width,int height,int format,int type,ByteBuffer pixels) {
         if(compiling!=null){final ByteBuffer copy=copy(pixels);if(record(()->glTexSubImage2D(target,level,x,y,width,height,format,type,copy)))return;}
-        outsideBegin();flushText();GL11C.glTexSubImage2D(target,level,x,y,width,height,format,type,pixels);
+        outsideBegin();flushExternal();GL11C.glTexSubImage2D(target,level,x,y,width,height,format,type,pixels);
+        if(terrainBatch!=null&&target==3553)terrainBatch.textureChanged(raster.originalBoundTexture(),level,x,y,width,height);
     }
     private static ByteBuffer copy(ByteBuffer bytes){if(bytes==null)return null;ByteBuffer copy=ByteBuffer.allocateDirect(bytes.remaining()).order(bytes.order());copy.put(bytes.duplicate()).flip();return copy;}
-    public void glCopyTexSubImage2D(int target,int level,int xoffset,int yoffset,int x,int y,int w,int h){if(record(()->glCopyTexSubImage2D(target,level,xoffset,yoffset,x,y,w,h)))return;GL11C.glCopyTexSubImage2D(target,level,xoffset,yoffset,x,y,w,h);}
+    public void glCopyTexSubImage2D(int target,int level,int xoffset,int yoffset,int x,int y,int w,int h){if(record(()->glCopyTexSubImage2D(target,level,xoffset,yoffset,x,y,w,h)))return;flushExternal();GL11C.glCopyTexSubImage2D(target,level,xoffset,yoffset,x,y,w,h);if(terrainBatch!=null&&target==3553)terrainBatch.textureChanged(raster.originalBoundTexture(),level,xoffset,yoffset,w,h);}
     public void glPixelStorei(int parameter,int value){outsideBegin();GL11C.glPixelStorei(parameter,value);}
-    public void glReadPixels(int x,int y,int w,int h,int format,int type,ByteBuffer pixels){outsideBegin();flushText();GL11C.glReadPixels(x,y,w,h,format,type,pixels);}
-    public int glGetError(){outsideBegin();flushText();return GL11C.glGetError();}
-    public String glGetString(int parameter){outsideBegin();flushText();if(parameter!=GL11C.GL_EXTENSIONS)return GL11C.glGetString(parameter);StringJoiner extensions=new StringJoiner(" ");for(int i=0;i<GL11C.glGetInteger(GL30C.GL_NUM_EXTENSIONS);i++)extensions.add(GL30C.glGetStringi(parameter,i));return extensions.toString();}
+    public void glReadPixels(int x,int y,int w,int h,int format,int type,ByteBuffer pixels){outsideBegin();flushExternal();GL11C.glReadPixels(x,y,w,h,format,type,pixels);}
+    public int glGetError(){outsideBegin();flushExternal();return GL11C.glGetError();}
+    public String glGetString(int parameter){outsideBegin();flushExternal();if(parameter!=GL11C.GL_EXTENSIONS)return GL11C.glGetString(parameter);StringJoiner extensions=new StringJoiner(" ");for(int i=0;i<GL11C.glGetInteger(GL30C.GL_NUM_EXTENSIONS);i++)extensions.add(GL30C.glGetStringi(parameter,i));return extensions.toString();}
     public void glGetFloat(int parameter,FloatBuffer value) {
         outsideBegin();if(parameter==2982||parameter==2983||parameter==2984){double[] matrix=state.matrices.get(parameter);if(value.remaining()<16)throw new IllegalArgumentException("Matrix output buffer");for(int i=0;i<16;i++)value.put(value.position()+i,(float)matrix[i]);}
         else if(parameter==2816){float[] color=state.color();if(value.remaining()<4)throw new IllegalArgumentException("Color output buffer");for(int i=0;i<4;i++)value.put(value.position()+i,color[i]);}
         else if(parameter==GL11C.GL_LINE_WIDTH){if(!value.hasRemaining())throw new IllegalArgumentException("Line width output buffer");value.put(value.position(),raster.lineWidth());}
-        else {flushText();GL11C.glGetFloatv(parameter,value);}
+        else {flushExternal();GL11C.glGetFloatv(parameter,value);}
     }
-    public int glGetInteger(int parameter){outsideBegin();if(parameter==2976)return state.matrices.mode();if(parameter==34016)return 33984+state.activeUnit();if(parameter==34017)return 33984+clientTexture;if(parameter==34018)return 4;if(parameter==2866)return 0;flushText();return GL11C.glGetInteger(parameter);}
-    public void glGetInteger(int parameter,IntBuffer value){outsideBegin();if(parameter==2976||parameter==34016||parameter==34017||parameter==34018||parameter==2866){if(!value.hasRemaining())throw new IllegalArgumentException("Integer output buffer");value.put(value.position(),glGetInteger(parameter));}else {flushText();GL11C.glGetIntegerv(parameter,value);}}
-    public void glDepthMask(boolean value){outsideBegin();if(compiling!=null&&!replayingMatrices){if(compiling.operations.size()>=1024*1024)throw new IllegalStateException("Oversized game model command group");compiling.operations.add(new Operation(){public void draw(){glDepthMask(value);}public void close(){}public int groups(){return 0x100;}public int batchDepthMask(){return value?1:0;}});return;}if(!pendingTerrain()||raster.depthMask()!=value)flushText();raster.depthMask(value);}
+    public int glGetInteger(int parameter){outsideBegin();if(parameter==2976)return state.matrices.mode();if(parameter==34016)return 33984+state.activeUnit();if(parameter==34017)return 33984+clientTexture;if(parameter==34018)return 4;if(parameter==2866)return 0;flushExternal();return GL11C.glGetInteger(parameter);}
+    public void glGetInteger(int parameter,IntBuffer value){outsideBegin();if(parameter==2976||parameter==34016||parameter==34017||parameter==34018||parameter==2866){if(!value.hasRemaining())throw new IllegalArgumentException("Integer output buffer");value.put(value.position(),glGetInteger(parameter));}else {flushExternal();GL11C.glGetIntegerv(parameter,value);}}
+    public void glDepthMask(boolean value){outsideBegin();if(compiling!=null&&!replayingMatrices){if(compiling.operations.size()>=1024*1024)throw new IllegalStateException("Oversized game model command group");appendOperation(new Operation(){public void draw(){glDepthMask(value);}public void close(){}public int groups(){return 0x100;}public int batchDepthMask(){return value?1:0;}});return;}if(!pendingTerrain()||raster.depthMask()!=value)flushText();raster.depthMask(value);}
     public void glDepthFunc(int value){if(record(()->glDepthFunc(value)))return;raster.set("depthFunc",0x100,()->GL11C.glDepthFunc(value));}
     public void glBlendFunc(int source,int destination){if(record(()->glBlendFunc(source,destination)))return;raster.set("blendFunc",0x4000,()->GL11C.glBlendFunc(source,destination));}
     public void glBlendEquation(int value){if(record(()->glBlendEquation(value)))return;raster.set("blendEquation",0x4000,()->GL14C.glBlendEquation(value));}

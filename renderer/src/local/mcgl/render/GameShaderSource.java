@@ -59,10 +59,14 @@ public final class GameShaderSource {
         return declarations(vertex,textureTables,false);
     }
     static String declarations(boolean vertex,boolean textureTables,boolean originalPalette) {
+        return declarations(vertex,textureTables,originalPalette,MeshArena.TAG_COUNT);
+    }
+    static String declarations(boolean vertex,boolean textureTables,boolean originalPalette,int tags) {
+        if(tags!=32&&tags!=128)throw new IllegalArgumentException("Original matrix palette size");
         String shared = "uniform mat4 uModelView, uProjection;\nuniform mat3 uNormalMatrix;\n"
                 + "struct GameFog { vec4 color; float start; float end; float density; };\nuniform GameFog uGameFog;\n"
                 + lightingDeclarations();
-        if (!vertex) return shared + (textureTables?textureDeclarations():"vec4 mcglTextureProj(sampler2D original,vec3 uv){return textureProj(original,uv);}\n") + "layout(location=0) out vec4 mcglOutColor;\n"
+        if (!vertex) return shared + (textureTables?textureDeclarations(originalPalette):"vec4 mcglTextureProj(sampler2D original,vec3 uv){return textureProj(original,uv);}\n") + "layout(location=0) out vec4 mcglOutColor;\n"
                 + "uniform int uAlphaFunction;\nuniform float uAlphaReference;\n"
                 + "bool mcglAlphaPass(float a) { float r = uAlphaReference;\n"
                 + "if (uAlphaFunction == 0 || uAlphaFunction == 8) return true;\n"
@@ -75,9 +79,10 @@ public final class GameShaderSource {
                 + "layout(location=9) in vec3 aLineOther;\nlayout(location=10) in vec2 aLineCorner;\n"
                 + "layout(location=11) in vec4 aChunkTransform;\nlayout(location=12) in vec3 aChunkRegion;\nuniform vec3 uGameChunkRegion;\n"
                 + "layout(location=13) in float aChunkInputs;\n"
-                + (textureTables?"flat out int vGameChunkTexture;\nvoid mcglChunkInputs(){vGameChunkTexture=(uGameAttributeMask & 2048)!=0 ? (int(aChunkInputs)&15) : 0;}\n":"void mcglChunkInputs(){}\n")
-                + (originalPalette?"layout(location=14) in float aOriginalModelTag;\nuniform mat4 uOriginalModelPalette[32];\nmat4 mcglModelViewMatrix(){return uOriginalModelPalette[int(aOriginalModelTag)];}\n"
+                + (originalPalette?"layout(location=14) in float aOriginalModelTag;\nuniform mat4 uOriginalModelPalette["+tags+"];\nmat4 mcglModelViewMatrix(){return uOriginalModelPalette[int(aOriginalModelTag)];}\n"
                     :"mat4 mcglModelViewMatrix() { if((uGameAttributeMask & 1024)==0) return uModelView; mat4 m=uModelView; vec3 offset=(aChunkRegion-uGameChunkRegion)+aChunkTransform.xyz; m[3]=uModelView*vec4(offset,1.0); m[0]*=aChunkTransform.w; m[1]*=aChunkTransform.w; m[2]*=aChunkTransform.w; return m; }\n")
+                + (originalPalette&&textureTables?"uniform int uOriginalInputPalette["+tags+"];\nint mcglOriginalInputs(){return uOriginalInputPalette[int(aOriginalModelTag)];}\n":"")
+                + (textureTables?"flat out int vGameChunkTexture;\nvoid mcglChunkInputs(){vGameChunkTexture="+(originalPalette?"mcglOriginalInputs()&15":"(uGameAttributeMask & 2048)!=0 ? (int(aChunkInputs)&15) : 0")+";}\n":"void mcglChunkInputs(){}\n")
                 + "mat3 mcglNormalMatrix() { return (uGameAttributeMask & 1024)==0 ? uNormalMatrix : uNormalMatrix/aChunkTransform.w; }\n"
                 + "uniform float uGameLineWidth;\nuniform vec2 uGameViewport;\nvec3 mcglInputPosition;\n"
                 + "vec4 mcglExpandLine(vec4 clip, vec4 other) { vec4 a=clip,b=other; float da=a.z+a.w,db=b.z+b.w;\n"
@@ -85,7 +90,7 @@ public final class GameShaderSource {
                 + "vec2 delta=(b.xy/max(abs(b.w),1e-6)-a.xy/max(abs(a.w),1e-6))*uGameViewport*aLineCorner.y; float len=length(delta);\n"
                 + "if(len>1e-6) clip.xy+=vec2(-delta.y,delta.x)/len*aLineCorner.x*uGameLineWidth/max(uGameViewport,vec2(1.0))*clip.w; return clip; }\n"
                 + "uniform vec4 uGameColor;\nuniform vec3 uGameNormal;\nuniform vec2 uGameUv, uGameLightmap;\n"
-                + "int mcglVertexMask() { if((uGameAttributeMask & 2048)!=0)return int(aChunkInputs)>>4; return (uGameAttributeMask & 128) != 0 ? int(aGameVertexMask) : uGameAttributeMask; }\n"
+                + (originalPalette&&textureTables?"int mcglVertexMask(){return mcglOriginalInputs()>>4;}\n":"int mcglVertexMask() { if((uGameAttributeMask & 2048)!=0)return int(aChunkInputs)>>4; return (uGameAttributeMask & 128) != 0 ? int(aGameVertexMask) : uGameAttributeMask; }\n")
                 + "vec4 mcglVertexColor() { return (mcglVertexMask() & 2) != 0 ? aColor : uGameColor; }\n"
                 + "vec3 mcglVertexNormal() { return (mcglVertexMask() & 16) != 0 ? aNormal : uGameNormal; }\n"
                 + "vec2 mcglVertexUv() { return (mcglVertexMask() & 4) != 0 ? aTexCoord : uGameUv; }\n"
@@ -112,7 +117,7 @@ public final class GameShaderSource {
         Matcher names=Pattern.compile("\\bcolorMap\\b").matcher(source);int references=0;while(names.find())references++;
         return lookups>0&&references==lookups+1;
     }
-    private static String textureDeclarations() {
+    private static String textureDeclarations(boolean originalPalette) {
         StringBuilder text=new StringBuilder("flat in int vGameChunkTexture;\nuniform int uGameChunkTextureRouting;\n");
         for(int i=1;i<=8;i++)text.append("uniform sampler2D uGameChunkTexture").append(i).append(";\n");
         // GLSL 4.10 §§4.1.7/8.7: no varying sampler-array indices or implicit derivatives in a divergent branch.
@@ -120,8 +125,16 @@ public final class GameShaderSource {
             .append("if(uGameChunkTextureRouting==0)return texture(original,uv);\n")
             .append("vec2 dx=dFdx(uv),dy=dFdy(uv);\n");
         for(int i=1;i<=8;i++)text.append("if(vGameChunkTexture==").append(i).append(")return textureGrad(uGameChunkTexture").append(i).append(",uv,dx,dy);\n");
-        return text.append("return textureGrad(original,uv,dx,dy);}\n")
-            .append("vec4 mcglTextureProj(sampler2D original,vec3 uv){if(uGameChunkTextureRouting==0)return textureProj(original,uv);return mcglTexture2D(original,uv.xy/uv.z);}\n").toString();
+        text.append("return textureGrad(original,uv,dx,dy);}\n");
+        if(originalPalette){
+            // Implicit/projective LOD and explicit gradients can differ on Apple
+            // GPUs under perspective. Sample only under uniform control flow,
+            // then choose the result. The batch-size benchmark includes this cost.
+            text.append("uniform int uOriginalTextureCount;\nvec4 mcglTextureProj(sampler2D original,vec3 uv){if(uGameChunkTextureRouting==0)return textureProj(original,uv);vec4 result=textureProj(uGameChunkTexture1,uv);\n");
+            text.append("if(uOriginalTextureCount>=2){vec4 sampled=textureProj(uGameChunkTexture2,uv);if(vGameChunkTexture==2)result=sampled;}\n");
+            text.append("return result;}\n");
+        }else text.append("vec4 mcglTextureProj(sampler2D original,vec3 uv){if(uGameChunkTextureRouting==0)return textureProj(original,uv);return mcglTexture2D(original,uv.xy/uv.z);}\n");
+        return text.toString();
     }
     /** Preserve line numbers and token separation; comments must not accidentally become migrated code. */
     private static String stripComments(String text) {

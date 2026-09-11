@@ -16,8 +16,11 @@ final class NativeMeshPipeline implements MeshPipeline {
     private final Set<NativeMeshArena> arenas=new HashSet<NativeMeshArena>();
     private boolean abandoned;
     public MeshArena createArena(String label,int vertexCapacity,int indexCapacity,long byteBudget){
+        return createArena(label,vertexCapacity,indexCapacity,byteBudget,MeshArena.Tags.DEFAULT);
+    }
+    public MeshArena createArena(String label,int vertexCapacity,int indexCapacity,long byteBudget,MeshArena.Tags tags){
         if(abandoned)throw new IllegalStateException("Mesh pipeline is closed");
-        NativeMeshArena arena=new NativeMeshArena(this,label,vertexCapacity,indexCapacity,byteBudget,arenas::remove);arenas.add(arena);return arena;
+        NativeMeshArena arena=new NativeMeshArena(this,label,vertexCapacity,indexCapacity,byteBudget,tags,arenas::remove);arenas.add(arena);return arena;
     }
     public Mesh create(String label, MeshData data, Usage usage) {
         if (abandoned) throw new IllegalStateException("Mesh pipeline is closed");

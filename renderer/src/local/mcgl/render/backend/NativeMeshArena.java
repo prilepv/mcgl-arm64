@@ -15,6 +15,7 @@ final class NativeMeshArena implements MeshArena {
     private final String label;
     private final int vertexCapacity,indexCapacity;
     private final long byteBudget;
+    private final Tags tags;
     private final Consumer<NativeMeshArena> retired;
     private final List<Page> pages=new ArrayList<Page>();
     private final Set<Member> members=Collections.newSetFromMap(new IdentityHashMap<Member,Boolean>());
@@ -23,8 +24,8 @@ final class NativeMeshArena implements MeshArena {
     private long bytes,creations;
     private int serial;
     private boolean closed;
-    NativeMeshArena(NativeMeshPipeline owner,String label,int vertexCapacity,int indexCapacity,long byteBudget,Consumer<NativeMeshArena> retired){
-        this.owner=owner;this.label=label;this.vertexCapacity=vertexCapacity;this.indexCapacity=indexCapacity;this.byteBudget=byteBudget;this.retired=retired;
+    NativeMeshArena(NativeMeshPipeline owner,String label,int vertexCapacity,int indexCapacity,long byteBudget,Tags tags,Consumer<NativeMeshArena> retired){
+        this.owner=owner;this.label=label;this.vertexCapacity=vertexCapacity;this.indexCapacity=indexCapacity;this.byteBudget=byteBudget;this.tags=tags;this.retired=retired;
     }
     private void check(){if(closed)throw new IllegalStateException("Mesh arena is closed: "+label);}
     public Mesh create(String name,MeshData data){
@@ -59,7 +60,7 @@ final class NativeMeshArena implements MeshArena {
             if(index>=0){selected=page;break;}page.vertices.release(vertex,vertices);vertex=-1;
         }
         if(selected==null){
-            int stride=(source.stride()+3)/4*4+4;
+            int stride=taggedLayout(source).stride();
             long required=(long)stride*vertexCapacity+(long)indexCapacity*4;
             // A spare from another layout must never displace live geometry from
             // the fixed budget. Same-layout spares were already tried above.
@@ -89,12 +90,12 @@ final class NativeMeshArena implements MeshArena {
     private Mesh upload(String name,Allocation range,ByteBuffer input,IndexData.Type type,ByteBuffer sourceIndices){
         final Page page=range.page;int vertices=range.vertices,indices=range.indices;boolean published=false;
         try{
-            int tag=serial++&(TAG_COUNT-1),stride=page.layout.stride(),sourceStride=page.source.stride();
+            int tag=serial++&(tags.count-1),stride=page.layout.stride(),sourceStride=page.source.stride();
             ByteBuffer upload=BufferUtils.createByteBuffer(Math.multiplyExact(vertices,stride));
             for(int v=0;v<vertices;v++){
                 int at=input.position()+v*sourceStride;for(int b=0;b<sourceStride;b++)upload.put(input.get(at+b));
-                while(upload.position()%stride<stride-4&&upload.position()%stride!=0)upload.put((byte)0);
-                upload.putFloat(tag);
+                if(page.compact)upload.put(v*stride+tags.packedOffset,(byte)tag);
+                else{while(upload.position()%stride<stride-4&&upload.position()%stride!=0)upload.put((byte)0);upload.putFloat(tag);}
             }
             upload.flip();ByteBuffer indexUpload=BufferUtils.createByteBuffer(Math.multiplyExact(indices,4));
             for(int i=0;i<indices;i++)indexUpload.putInt(type==IndexData.Type.UINT16?sourceIndices.getShort()&65535:sourceIndices.getInt());indexUpload.flip();
@@ -160,17 +161,22 @@ final class NativeMeshArena implements MeshArena {
         public void updateIndices(IndexData data){throw new IllegalStateException("Arena members are immutable");}
         public void close(){if(closed)return;closed=true;members.remove(this);page.vertices.release(firstVertex,vertices);page.indices.release(firstIndex,indices);if(--page.members==0)empty(page);}
     }
+    private VertexLayout taggedLayout(VertexLayout source){
+        boolean compact=source.equals(tags.packedLayout);int offset=compact?tags.packedOffset:(source.stride()+3)/4*4;
+        List<VertexLayout.Attribute> attributes=new ArrayList<VertexLayout.Attribute>(source.attributes());
+        attributes.add(new VertexLayout.Attribute(TAG_ATTRIBUTE,1,compact?VertexLayout.Storage.UINT8:VertexLayout.Storage.FLOAT32,false,offset));
+        return new VertexLayout(compact?source.stride():offset+4,attributes.toArray(new VertexLayout.Attribute[0]));
+    }
     private final class Page {
         final VertexLayout source,layout;
+        final boolean compact;
         final MeshArenaRanges vertices,indices;
         final int vao,vbo,ibo;
         final long bytes;
         int members;
         Page(VertexLayout source,int vertexCapacity,int indexCapacity){
             vertices=new MeshArenaRanges(vertexCapacity);indices=new MeshArenaRanges(indexCapacity);
-            this.source=source;int offset=(source.stride()+3)/4*4;
-            List<VertexLayout.Attribute> attributes=new ArrayList<VertexLayout.Attribute>(source.attributes());attributes.add(new VertexLayout.Attribute(TAG_ATTRIBUTE,1,VertexLayout.Storage.FLOAT32,false,offset));
-            layout=new VertexLayout(offset+4,attributes.toArray(new VertexLayout.Attribute[0]));bytes=(long)layout.stride()*vertexCapacity+(long)indexCapacity*4;
+            this.source=source;compact=source.equals(tags.packedLayout);layout=taggedLayout(source);bytes=(long)layout.stride()*vertexCapacity+(long)indexCapacity*4;
             int previousVao=GL11C.glGetInteger(GL30C.GL_VERTEX_ARRAY_BINDING),previousArray=GL11C.glGetInteger(GL15C.GL_ARRAY_BUFFER_BINDING);
             int newVao=0,newVbo=0,newIbo=0;boolean published=false;
             try{

@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 workspace_dir=${script_dir:h:h}
-version=1.7.1
+version=1.7.2
 dependency_root=${MCGL_BUILD_INPUTS:-$script_dir}
 output_root=${MCGL_RELEASE_OUTPUT_ROOT:-$workspace_dir/dist}
 release_name="Minecraft-Galaxy-ARM64-Bootstrap-${version}"

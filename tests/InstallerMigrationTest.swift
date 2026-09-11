@@ -63,6 +63,16 @@ struct InstallerMigrationTest {
             installedMarker: "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-8\n"))
         precondition(!MCGLInstaller.needsAlphaSortMigration(
             installedMarker: "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-9\n"))
+        precondition(!MCGLInstaller.needsAlphaSortMigration(
+            installedMarker: "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-10\n"))
+        precondition(!MCGLInstaller.needsAlphaSortMigration(
+            installedMarker: "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-11\n"))
+        precondition(!MCGLInstaller.needsAlphaSortMigration(
+            installedMarker: "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-12\n"))
+        precondition(!MCGLInstaller.needsAlphaSortMigration(
+            installedMarker: "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-13\n"))
+        precondition(!MCGLInstaller.needsAlphaSortMigration(
+            installedMarker: "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-14\n"))
         print("INSTALLER_MIGRATION_PASS alphaSort is changed once and line endings survive")
     }
 }

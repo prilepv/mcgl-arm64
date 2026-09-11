@@ -12,6 +12,7 @@ public final class OriginalChunkCacheProbe {
     private static int checks;
     public static int run(GameRenderCommands g)throws Exception {
         checks=0;int handles=g.glGenLists(12),cached=g.cachedModels(),resident=g.residentChunks();
+        boolean packed=Boolean.parseBoolean(System.getProperty("mcgl.terrain.wideArena","true"));int expectedStride=packed?40:44;
         g.glPushAttrib(-1);g.glMatrixMode(5889);g.glPushMatrix();g.glLoadIdentity();g.glOrtho(-1,1,-1,1,-10,10);
         g.glMatrixMode(5888);g.glPushMatrix();g.glLoadIdentity();
         try {
@@ -23,7 +24,8 @@ public final class OriginalChunkCacheProbe {
             check(g.cachedModels()==cached&&g.residentChunks()==resident,"unpublished passes stay outside live registry");
             g.finishOriginalChunk();check(g.cachedModels()==cached+3&&g.residentChunks()==resident+1,"one original chunk owns three independent Core passes");
             List<Mesh> meshes=meshes(g,handles,3);check(meshes.size()==3,"one indexed mesh per original drained batch");
-            for(Mesh mesh:meshes)check(mesh.layout().stride()==44&&mesh.indexCount()==6&&(mesh.layout().attributeMask()&(1<<14))!=0,"original quad words and flat inputs plus one immutable arena tag; no CPU-transformed positions");
+            for(Mesh mesh:meshes){check(mesh.layout().stride()==expectedStride&&mesh.indexCount()==6&&(mesh.layout().attributeMask()&(1<<14))!=0,"original quad words and flat inputs plus one immutable arena tag; no CPU-transformed positions");
+                for(VertexLayout.Attribute a:mesh.layout().attributes())if(a.location==14)check(a.offset==(packed?39:40)&&a.storage==(packed?VertexLayout.Storage.UINT8:VertexLayout.Storage.FLOAT32)&&!a.normalized,"only the unused normal padding byte replaces the appended tag");}
             long uploads=g.chunkIndexUploads(),calls=g.chunkDrawCalls(),ordinary=g.drawCalls();
             clear(g);g.glCallList(handles);pixel(255,0,0,"original solid pass");
             check(g.chunkDrawCalls()==calls+1&&g.drawCalls()==ordinary,"original terrain submissions remain separate from other geometry counters");
@@ -69,7 +71,7 @@ public final class OriginalChunkCacheProbe {
             g.glDisable(GL11C.GL_BLEND);g.beginOriginalChunk(handles+9,3);g.glNewList(handles+9,4864);
             t.begin();t.draw();t.beginMode(6);t.color(40,120,200,255);t.quad(-.8,-.8,.8,.8,0);t.draw();t.begin();t.draw();g.glEndList();g.finishOriginalChunk();
             clear(g);g.glCallList(handles+9);pixel(40,120,200,"original quad/fan/quad transition reaches indexed Core mesh");
-            check(meshes(g,handles+9,1).get(0).layout().stride()==44,"fan retains original 32-byte records, disabled flat inputs and one arena tag in the shared quad format");
+            check(meshes(g,handles+9,1).get(0).layout().stride()==expectedStride,"fan retains original 32-byte records, disabled flat inputs and one arena tag in the shared quad format");
             check(g.glGetError()==0,"original chunk cache is Core-valid");
         }finally {
             g.abortOriginalChunk();g.glDeleteLists(handles,12);

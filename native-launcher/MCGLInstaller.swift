@@ -19,7 +19,7 @@ final class MCGLInstaller {
     private var resolvedAddressCache: [String: [String]] = [:]
     // Separate from launcher version. LWJGL 3 requires fresh original JARs
     // before the existing game transforms and the final binding-only adapter.
-    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-9\n"
+    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-14\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,
         URL(string: "http://f3.mcgl.ru/mclient/")!,

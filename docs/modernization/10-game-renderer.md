@@ -577,3 +577,26 @@ a repeat required no updates. Release 1.7.1 retains this renderer with refreshed
 release metadata and installer marker `lwjgl3-game-original-core-9`. The later
 experimental compiled-model merging path is not included. No server-world FPS
 improvement is claimed for this maintenance release.
+
+## Accepted render optimization (1.7.2, build 196)
+
+Release 1.7.2 packages the accepted build 196 renderer unchanged. It combines
+word-preserving geometry preparation, bounded compile-time joining of adjacent
+compatible model parts, redundant raster-state suppression, and ordered terrain
+material batching. This is a separately tested implementation; it does not
+reinstate the discarded build 190 or the historical hotpaths experiment.
+
+Compatible original textures may be copied GPU-to-GPU into a bounded array cache
+(64 MiB, at most 32 pages). Source updates, sampler state, mip levels, resource
+retirement and render-target exclusions are tracked; incompatible inputs retain
+the previous path. Wider original-geometry arenas allow up to 320 MiB, and 128
+compact matrix tags use the reserved byte of the original 40-byte terrain layout.
+Drivers with fewer than 4096 vertex uniform components retain 32 tags. Existing
+geometry ordering and local transparent sorting remain unchanged.
+
+Built-in unlit shader variants are selected only when the original logical
+lighting state is disabled. Lit paths and imported game effects remain intact.
+No persistent CPU shadow of the full GPU geometry or merged-index cache is added.
+Installer marker `lwjgl3-game-original-core-14` updates old installations without
+resetting their graphics settings. Automated checks and their limits are recorded
+in [TESTING](../TESTING.md); no fixed server-world FPS is claimed.
