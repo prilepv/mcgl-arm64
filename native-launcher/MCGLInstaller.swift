@@ -19,7 +19,7 @@ final class MCGLInstaller {
     private var resolvedAddressCache: [String: [String]] = [:]
     // Separate from launcher version. LWJGL 3 requires fresh original JARs
     // before the existing game transforms and the final binding-only adapter.
-    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-14\n"
+    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-15\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,
         URL(string: "http://f3.mcgl.ru/mclient/")!,
@@ -167,12 +167,8 @@ final class MCGLInstaller {
         progress("Установка нативных компонентов Apple Silicon…")
         try overlayPortSupport(from: portSupportURL, to: temporaryURL)
 
-        let stagedGameJar = temporaryURL.appendingPathComponent("bin/mcgl.jar")
-        if fileManager.fileExists(atPath: stagedGameJar.path) {
-            progress("Применение ARM64, оконных патчей и оптимизации эффектов…")
-            try patchClient(in: temporaryURL)
-        }
-        try adaptLWJGL(in: temporaryURL)
+        progress("Проверка совместимости клиента и применение ARM64-патчей…")
+        try prepareStagedClient(in: temporaryURL)
 
         try Data(portMarker.utf8).write(
             to: temporaryURL.appendingPathComponent(".arm64-port-version"),
@@ -572,6 +568,43 @@ final class MCGLInstaller {
         }
     }
 
+    // Only operates on a disposable staging tree. No installed files are applied
+    // until normalization, all render patches and name restoration have succeeded.
+    func prepareStagedClient(in gameRoot: URL) throws {
+        guard gameRoot.resolvingSymlinksInPath().standardizedFileURL !=
+                gameDirectoryURL.resolvingSymlinksInPath().standardizedFileURL else {
+            throw installerError("патчи разрешены только во временной папке обновления")
+        }
+        let gameJar = gameRoot.appendingPathComponent("bin/mcgl.jar")
+        guard fileManager.fileExists(atPath: gameJar.path) else {
+            try adaptLWJGL(in: gameRoot)
+            return
+        }
+        let workURL = supportRootURL.appendingPathComponent(
+            ".client-compatibility-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: workURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: workURL) }
+        let original = workURL.appendingPathComponent("official.jar")
+        let restored = workURL.appendingPathComponent("restored.jar")
+        let asmJar = patchToolsURL.appendingPathComponent("asm-debug-all.jar")
+        let classpath = patchToolsURL.path + ":" + asmJar.path
+        try fileManager.moveItem(at: gameJar, to: original)
+        _ = try runProcess(executable: javaExecutableURL, arguments: [
+            "-cp", classpath, "MCGLClientCompatibility", "normalize", original.path, gameJar.path
+        ])
+        try patchClient(in: gameRoot)
+        try adaptLWJGL(in: gameRoot)
+        _ = try runProcess(executable: javaExecutableURL, arguments: [
+            "-cp", classpath, "MCGLClientCompatibility", "restore", original.path, gameJar.path, restored.path
+        ])
+        _ = try runProcess(executable: javaExecutableURL, arguments: [
+            "-cp", classpath + ":" + gameRoot.appendingPathComponent("bin/lwjgl.jar").path,
+            "LWJGL3LinkageAudit", restored.path
+        ])
+        try fileManager.removeItem(at: gameJar)
+        try fileManager.moveItem(at: restored, to: gameJar)
+    }
+
     private func patchClient(in gameRoot: URL) throws {
         let gameJar = gameRoot.appendingPathComponent("bin/mcgl.jar")
         let arm64PatchClass = patchToolsURL.appendingPathComponent("ClassBytePatch.class")
@@ -612,7 +645,7 @@ final class MCGLInstaller {
         _ = try runProcess(
             executable: javaExecutableURL,
             arguments: [
-                "-cp", patchToolsURL.path,
+                "-cp", patchToolsURL.path + ":" + asmJar.path,
                 "ClassBytePatch", inputClass.path
             ])
         _ = try runProcess(
@@ -708,6 +741,9 @@ final class MCGLInstaller {
         guard process.terminationStatus == 0 else {
             let detail = String(data: errorData + outputData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if detail?.contains("MCGL_UNSUPPORTED_CLIENT:") == true {
+                throw installerError("официальный клиент MCGL изменился и пока не поддерживается этой версией ARM64-лаунчера. Требуется обновление лаунчера; установленный клиент и настройки не изменены.")
+            }
             throw installerError(detail?.isEmpty == false
                 ? detail!
                 : "вспомогательный процесс завершился с кодом \(process.terminationStatus)")

@@ -1,7 +1,6 @@
 import java.util.*;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
-import java.util.zip.CRC32;
 
 /** Opt-in terrain VBOs. Keep native lists as the fallback for unknown GL commands. */
 public final class PatchMCGLChunkVbo implements Opcodes {
@@ -11,12 +10,7 @@ public final class PatchMCGLChunkVbo implements Opcodes {
         if (!ok) throw new IllegalStateException("Unsupported MCGL VBO bytecode: " + why);
     }
     static long fingerprint(MethodNode method) {
-        ClassWriter w = new ClassWriter(0);
-        w.visit(50, 1, "Fingerprint", null, "java/lang/Object", null);
-        method.accept(w); w.visitEnd();
-        CRC32 crc = new CRC32(); crc.update(w.toByteArray());
-        method.instructions.resetLabels();
-        return crc.getValue();
+        return MCGLBytecodeFingerprint.of(method);
     }
     private static void validate(ClassNode c, String name, String desc, long expected) {
         for (MethodNode m : c.methods) if (m.name.equals(name) && m.desc.equals(desc)) {

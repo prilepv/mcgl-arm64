@@ -2,7 +2,6 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.jar.*;
-import java.util.zip.CRC32;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 
@@ -117,9 +116,7 @@ public final class PatchMCGLChunks implements Opcodes {
         throw new IOException("Missing accumulator method: " + name + descriptor);
     }
     private static long fingerprint(MethodNode method) {
-        ClassWriter writer = new ClassWriter(0); writer.visit(50, 1, "Fingerprint", null, "java/lang/Object", null);
-        method.accept(writer); writer.visitEnd(); method.instructions.resetLabels();
-        CRC32 crc = new CRC32(); crc.update(writer.toByteArray()); return crc.getValue();
+        return MCGLBytecodeFingerprint.of(method);
     }
     private static ClassNode type(byte[] bytes) { ClassNode node = new ClassNode(); new ClassReader(bytes).accept(node, 0); return node; }
     private static byte[] read(JarFile jar, String name) throws IOException {

@@ -1,156 +1,151 @@
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.JumpInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.VarInsnNode;
 
-/**
- * Keeps the old game class structurally intact while disabling two AWT-only
- * operations that cannot work when LWJGL owns a separate Cocoa window.
- */
-public final class ClassBytePatch {
+/** Disable only startup AWT/window ownership, without constant-pool offsets. */
+public final class ClassBytePatch implements Opcodes {
+    private static final String CLIENT = "net/minecraft/client/Minecraft";
+    private static final String APPLET = "net/minecraft/client/MinecraftApplet";
+    private static final String DISPLAY = "org/lwjgl/opengl/Display";
+
+    private static AbstractInsnNode previousReal(AbstractInsnNode instruction) {
+        if (instruction == null) return null;
+        AbstractInsnNode result = instruction.getPrevious();
+        while (result != null && result.getOpcode() < 0) result = result.getPrevious();
+        return result;
+    }
+
+    private static boolean call(AbstractInsnNode instruction, String name, String desc) {
+        if (!(instruction instanceof MethodInsnNode)) return false;
+        MethodInsnNode method = (MethodInsnNode) instruction;
+        return method.getOpcode() == INVOKESTATIC && DISPLAY.equals(method.owner)
+                && name.equals(method.name) && desc.equals(method.desc);
+    }
+
+    private static void require(boolean condition, String reason) {
+        if (!condition) throw new IllegalStateException("Unsupported official Minecraft.class: " + reason);
+    }
+
+    private static <T> T one(List<T> matches, String description) {
+        require(matches.size() == 1, "expected one " + description + ", found " + matches.size());
+        return matches.get(0);
+    }
+
+    private static boolean sameField(AbstractInsnNode instruction, FieldInsnNode expected) {
+        if (!(instruction instanceof FieldInsnNode)) return false;
+        FieldInsnNode field = (FieldInsnNode) instruction;
+        return field.getOpcode() == GETFIELD && field.owner.equals(expected.owner)
+                && field.name.equals(expected.name) && field.desc.equals(expected.desc);
+    }
+
+    /** Returns new bytes only after every expected startup site has been validated. */
+    public static byte[] patch(byte[] data) {
+        ClassReader reader = new ClassReader(data);
+        ClassNode owner = new ClassNode();
+        reader.accept(owner, 0);
+        require(CLIENT.equals(owner.name), "wrong class " + owner.name);
+        List<MethodInsnNode> parents = new ArrayList<MethodInsnNode>();
+        MethodNode startup = null;
+        for (MethodNode method : owner.methods) {
+            for (AbstractInsnNode instruction : method.instructions.toArray()) {
+                if (call(instruction, "setParent", "(Ljava/awt/Canvas;)V")) {
+                    parents.add((MethodInsnNode) instruction);
+                    startup = method;
+                }
+            }
+        }
+        MethodInsnNode parent = one(parents, "Display.setParent call");
+        require("()V".equals(startup.desc) && (startup.access & ACC_STATIC) == 0,
+                "unexpected startup method");
+        AbstractInsnNode receiver = previousReal(parent);
+        require(receiver instanceof FieldInsnNode, "setParent must receive the client Canvas field");
+        FieldInsnNode canvas = (FieldInsnNode) receiver;
+        AbstractInsnNode self = previousReal(canvas);
+        require(canvas.getOpcode() == GETFIELD && CLIENT.equals(canvas.owner)
+                && "Ljava/awt/Canvas;".equals(canvas.desc)
+                && self instanceof VarInsnNode && self.getOpcode() == ALOAD
+                && ((VarInsnNode) self).var == 0, "unexpected setParent receiver");
+
+        List<FieldInsnNode> branches = new ArrayList<FieldInsnNode>();
+        List<MethodInsnNode> modes = new ArrayList<MethodInsnNode>();
+        List<MethodInsnNode> creates = new ArrayList<MethodInsnNode>();
+        Set<String> appletFieldTypes = new HashSet<String>();
+        for (AbstractInsnNode instruction : startup.instructions.toArray()) {
+            if (instruction instanceof JumpInsnNode && instruction.getOpcode() == IFNULL
+                    && sameField(previousReal(instruction), canvas)
+                    && startup.instructions.indexOf(instruction) < startup.instructions.indexOf(parent)
+                    && startup.instructions.indexOf(((JumpInsnNode) instruction).label)
+                        > startup.instructions.indexOf(parent)) {
+                branches.add((FieldInsnNode) previousReal(instruction));
+            }
+            if (call(instruction, "setDisplayMode", "(Lorg/lwjgl/opengl/DisplayMode;)V"))
+                modes.add((MethodInsnNode) instruction);
+            if (call(instruction, "create", "(Lorg/lwjgl/opengl/PixelFormat;)V"))
+                creates.add((MethodInsnNode) instruction);
+            if (instruction instanceof FieldInsnNode && instruction.getOpcode() == GETFIELD) {
+                FieldInsnNode field = (FieldInsnNode) instruction;
+                // The loading Canvas is an object field of MinecraftApplet. Its
+                // class/field/method names may change in the official obfuscator.
+                if (APPLET.equals(field.owner) && field.desc.startsWith("L"))
+                    appletFieldTypes.add(field.desc.substring(1, field.desc.length() - 1));
+            }
+        }
+        FieldInsnNode branchCanvas = one(branches, "embedded-window branch");
+        MethodInsnNode mode = one(modes, "startup Display.setDisplayMode call");
+        MethodInsnNode create = one(creates, "startup Display.create(PixelFormat) call");
+        List<MethodInsnNode> loading = new ArrayList<MethodInsnNode>();
+        Set<String> loadingTargets = new HashSet<String>();
+        for (AbstractInsnNode instruction : startup.instructions.toArray()) {
+            if (!(instruction instanceof MethodInsnNode)) continue;
+            MethodInsnNode method = (MethodInsnNode) instruction;
+            if (method.getOpcode() == INVOKEVIRTUAL && "(Ljava/lang/String;)V".equals(method.desc)
+                    && appletFieldTypes.contains(method.owner)) {
+                loading.add(method);
+                loadingTargets.add(method.owner + "." + method.name + method.desc);
+            }
+        }
+        require(loadingTargets.size() == 1 && loading.size() == 12,
+                "expected 12 calls to one applet loading-screen method, found "
+                + loading.size() + " calls / " + loadingTargets.size() + " methods");
+
+        // Stack-neutral replacements preserve branches and existing frames.
+        // DirectLauncher already owns the window and its OpenGL context.
+        startup.instructions.set(parent, new InsnNode(POP));
+        InsnList nullCanvas = new InsnList();
+        nullCanvas.add(new InsnNode(POP)); // discard client reference instead of reading its Canvas
+        nullCanvas.add(new InsnNode(ACONST_NULL));
+        startup.instructions.insertBefore(branchCanvas, nullCanvas);
+        startup.instructions.remove(branchCanvas);
+        startup.instructions.set(mode, new InsnNode(POP));
+        startup.instructions.set(create, new InsnNode(POP));
+        for (MethodInsnNode method : loading) startup.instructions.set(method, new InsnNode(POP2));
+        // Other methods (including in-game display-mode changes) stay untouched.
+        ClassWriter writer = new ClassWriter(reader, 0);
+        owner.accept(writer);
+        return writer.toByteArray();
+    }
+
     public static void main(String[] args) throws Exception {
-        if (args.length != 1)
-            throw new IllegalArgumentException("Expected Minecraft.class path");
-
+        if (args.length != 1) throw new IllegalArgumentException("Expected Minecraft.class path");
         Path path = Paths.get(args[0]);
-        byte[] data = Files.readAllBytes(path);
-        byte[] parentNeedle = new byte[] {
-            0x2a, (byte)0xb4, 0x01, 0x03,
-            (byte)0xb8, 0x01, (byte)0xef
-        };
-
-        int match = -1;
-        int count = 0;
-        for (int i = 0; i <= data.length - parentNeedle.length; i++) {
-            boolean same = true;
-            for (int j = 0; j < parentNeedle.length; j++) {
-                if (data[i + j] != parentNeedle[j]) {
-                    same = false;
-                    break;
-                }
-            }
-            if (same) {
-                match = i;
-                count++;
-            }
-        }
-
-        if (count != 1)
-            throw new IllegalStateException("Expected one Display.setParent sequence, found " + count);
-
-        data[match + 4] = 0x57; // pop Canvas
-        data[match + 5] = 0x00; // nop
-        data[match + 6] = 0x00; // nop
-        System.out.println("Patched Display.setParent at class offset " + (match + 4));
-
-        // The following null check originally chooses between embedded-Canvas
-        // mode and standalone-window mode.  Make its input null while keeping
-        // the same byte length and branch instruction, so the existing
-        // DisplayMode(width, height) path is taken with the constructor's
-        // 900x700 dimensions.
-        byte[] modeBranchNeedle = new byte[] {
-            0x2a, (byte)0xb4, 0x01, 0x03,
-            (byte)0xc6, 0x00, 0x23
-        };
-        int modeBranchMatch = -1;
-        int modeBranchCount = 0;
-        for (int i = 0; i <= data.length - modeBranchNeedle.length; i++) {
-            boolean same = true;
-            for (int j = 0; j < modeBranchNeedle.length; j++) {
-                if (data[i + j] != modeBranchNeedle[j]) {
-                    same = false;
-                    break;
-                }
-            }
-            if (same) {
-                modeBranchMatch = i;
-                modeBranchCount++;
-            }
-        }
-        if (modeBranchCount != 1)
-            throw new IllegalStateException("Expected one embedded-window branch, found " + modeBranchCount);
-
-        data[modeBranchMatch] = 0x01;     // aconst_null
-        data[modeBranchMatch + 1] = 0x00; // nop
-        data[modeBranchMatch + 2] = 0x00; // nop
-        data[modeBranchMatch + 3] = 0x00; // nop
-        System.out.println("Forced standalone DisplayMode branch at class offset " + modeBranchMatch);
-
-        // invokevirtual #316 is net.A.for.G.super(String), the decorative AWT
-        // loading-screen update.  The receiver and String are both category-1
-        // values, so pop2 + two nops is a same-length, stack-neutral replacement.
-        byte[] loadingNeedle = new byte[] {(byte)0xb6, 0x01, 0x3c};
-        int loadingCount = 0;
-        for (int i = 0; i <= data.length - loadingNeedle.length; i++) {
-            if (data[i] == loadingNeedle[0] &&
-                    data[i + 1] == loadingNeedle[1] &&
-                    data[i + 2] == loadingNeedle[2]) {
-                data[i] = 0x58;     // pop2: discard loading Canvas and message
-                data[i + 1] = 0x00; // nop
-                data[i + 2] = 0x00; // nop
-                loadingCount++;
-            }
-        }
-        if (loadingCount != 12)
-            throw new IllegalStateException("Expected 12 AWT loading-screen calls, found " + loadingCount);
-
-        // DirectLauncher now creates the Display and raises its NSWindow on
-        // the JVM main thread.  Suppress only the startup setDisplayMode call,
-        // which would otherwise destroy and recreate that already-raised
-        // window.  Other in-game display-mode changes remain untouched.
-        byte[] startupModeNeedle = new byte[] {
-            (byte)0xbb, 0x01, (byte)0xff, 0x59,
-            0x2a, (byte)0xb4, 0x01, 0x05,
-            0x2a, (byte)0xb4, 0x01, 0x07,
-            (byte)0xb7, 0x02, 0x04,
-            (byte)0xb8, 0x02, 0x08
-        };
-        int startupModeCount = 0;
-        for (int i = 0; i <= data.length - startupModeNeedle.length; i++) {
-            boolean same = true;
-            for (int j = 0; j < startupModeNeedle.length; j++) {
-                if (data[i + j] != startupModeNeedle[j]) {
-                    same = false;
-                    break;
-                }
-            }
-            if (same) {
-                int call = i + startupModeNeedle.length - 3;
-                data[call] = 0x57;     // pop DisplayMode
-                data[call + 1] = 0x00; // nop
-                data[call + 2] = 0x00; // nop
-                startupModeCount++;
-            }
-        }
-        if (startupModeCount != 1)
-            throw new IllegalStateException("Expected one startup DisplayMode call, found " + startupModeCount);
-
-        // Likewise suppress the one startup Display.create(PixelFormat) call;
-        // the matching context is already current on this same Java thread.
-        byte[] startupCreateNeedle = new byte[] {
-            0x2b, (byte)0xb8, 0x02, 0x1f,
-            (byte)0xa7, 0x00, 0x15
-        };
-        int startupCreateCount = 0;
-        for (int i = 0; i <= data.length - startupCreateNeedle.length; i++) {
-            boolean same = true;
-            for (int j = 0; j < startupCreateNeedle.length; j++) {
-                if (data[i + j] != startupCreateNeedle[j]) {
-                    same = false;
-                    break;
-                }
-            }
-            if (same) {
-                data[i + 1] = 0x57; // pop PixelFormat
-                data[i + 2] = 0x00;
-                data[i + 3] = 0x00;
-                startupCreateCount++;
-            }
-        }
-        if (startupCreateCount != 1)
-            throw new IllegalStateException("Expected one startup Display.create call, found " + startupCreateCount);
-
-        Files.write(path, data);
-        System.out.println("Patched " + loadingCount + " AWT loading-screen calls.");
-        System.out.println("Patched startup DisplayMode and Display.create calls for direct Cocoa ownership.");
+        byte[] patched = patch(Files.readAllBytes(path));
+        Files.write(path, patched);
+        System.out.println("Patched startup window ownership and 12 AWT loading-screen calls (semantic bytecode matching).");
     }
 }

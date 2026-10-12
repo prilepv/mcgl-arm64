@@ -2,7 +2,6 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.jar.*;
-import java.util.zip.CRC32;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 
@@ -316,7 +315,7 @@ public final class PatchMCGLGame implements Opcodes {
     private static void clear(MethodNode m){m.instructions.clear();m.tryCatchBlocks.clear();if(m.localVariables!=null)m.localVariables.clear();m.maxStack=0;m.maxLocals=0;m.visitCode();}
     private static void end(MethodNode m){m.visitMaxs(0,0);m.visitEnd();}
     private static MethodNode method(ClassNode n,String name,String desc)throws IOException{for(MethodNode m:n.methods)if(m.name.equals(name)&&m.desc.equals(desc))return m;throw new IOException("Missing game method: "+name+desc);}
-    private static long fingerprint(MethodNode method){ClassWriter w=new ClassWriter(0);w.visit(50,1,"Fingerprint",null,"java/lang/Object",null);method.accept(w);w.visitEnd();method.instructions.resetLabels();CRC32 crc=new CRC32();crc.update(w.toByteArray());return crc.getValue();}
+    private static long fingerprint(MethodNode method){return MCGLBytecodeFingerprint.of(method);}
     private static ClassNode type(byte[] bytes){ClassNode n=new ClassNode();new ClassReader(bytes).accept(n,0);return n;}
     private static byte[] read(JarFile jar,String name)throws IOException{JarEntry e=jar.getJarEntry(name);if(e==null)throw new IOException("Missing entry: "+name);try(InputStream in=jar.getInputStream(e);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[16384];for(int n;(n=in.read(b))!=-1;)out.write(b,0,n);return out.toByteArray();}}
     private static void write(JarOutputStream output,String name,byte[] data)throws IOException{JarEntry e=new JarEntry(name);e.setTime(0);output.putNextEntry(e);output.write(data);output.closeEntry();}

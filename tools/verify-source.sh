@@ -125,6 +125,11 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/tests/Launcher172UpgradeTest.swift" -o "$result_dir/release-172-upgrade-test"
 "$result_dir/release-172-upgrade-test"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework CryptoKit \
+    "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
+    "$source_root/tests/Launcher173UpgradeTest.swift" -o "$result_dir/release-173-upgrade-test"
+"$result_dir/release-173-upgrade-test"
 swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" \
     "$source_root/tools/BuildICNS.swift" -o "$result_dir/build-icns"
@@ -176,12 +181,15 @@ test_cp="$classes:$asm:$lwjgl"
 "$jdk_root/bin/javac" -encoding UTF-8 "${compiler_options[@]}" -cp "$test_cp" -d "$classes" \
     "$source_root/native-window-patch/ClassBytePatch.java" \
     "$source_root/awt-patch/src/local/mcgl/CocoaWindowBridge.java" \
+    "$source_root/tools/MCGLBytecodeFingerprint.java" \
+    "$source_root/tools/MCGLClientCompatibility.java" \
     "$source_root"/tools/PatchMCGL*.java \
     "$source_root/tools/RenderCommandSpec.java" "$source_root/tools/GenerateRenderBridge.java" \
     "$source_root"/performance-patch/src/local/mcgl/perf/*.java \
     "$source_root"/tests/*.java
 run_test() { "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$test_cp" "$@"; }
 run_test PerformanceTest
+run_test ClassBytePatchTest
 run_test MeshIndexTest
 run_test org.lwjgl.opengl.FrameLimiterTest
 for profile in false true; do
@@ -199,6 +207,7 @@ done
 
 if [[ $# == 4 ]]; then
     [[ -f "$3" && -f "$4" ]] || { echo 'Original client JAR input missing.' >&2; exit 66; }
+    run_test ClassBytePatchTest "$3"
     "$jdk_root/bin/javac" -encoding UTF-8 "${compiler_options[@]}" -cp "$test_cp:$4" -d "$classes" \
         "$source_root/awt-patch/src/local/mcgl/DirectLauncher.java"
     run_test QuadSortTest "$3"

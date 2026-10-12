@@ -12,11 +12,22 @@ public final class QuadSortTest implements Opcodes {
     static int serial;
     static Sorter fixture(String path, boolean optimized) throws Exception {
         ClassNode original = new ClassNode();
+        final Map<String, ClassNode> companions = new HashMap<String, ClassNode>();
         try (JarFile jar = new JarFile(path)) {
             ClassNode chunk = new ClassNode(); new ClassReader(jar.getInputStream(jar.getJarEntry("net/A/U/H.class"))).accept(chunk, 0);
             String tess = null;
             for (FieldNode f : chunk.fields) if ((f.access & ACC_STATIC) != 0 && f.desc.startsWith("Lnet/A/for/")) tess = f.desc.substring(1, f.desc.length() - 1);
             new ClassReader(jar.getInputStream(jar.getJarEntry(tess + ".class"))).accept(original, 0);
+            // The updated official sorter uses one pure distance comparator.
+            // Extract only that class and the sort method, never game initializers.
+            for (MethodNode m : original.methods) if (m.name.equals("Ó00000") && m.desc.equals("(DDD)V"))
+                for (AbstractInsnNode i : m.instructions.toArray()) if (i.getOpcode() == NEW && i instanceof TypeInsnNode) {
+                    String name = ((TypeInsnNode)i).desc;
+                    if (!name.equals("local/mcgl/staging/upstream/net/A/for/superObject$1")) throw new AssertionError("Unexpected sort companion: " + name);
+                    ClassNode comparator = new ClassNode(); new ClassReader(jar.getInputStream(jar.getJarEntry(name + ".class"))).accept(comparator, 0);
+                    for (MethodNode method : comparator.methods) if (method.name.equals("<clinit>")) throw new AssertionError("Comparator initializer");
+                    companions.put(name, comparator);
+                }
         }
         ClassNode c = new ClassNode(); c.version = V1_6; c.access = ACC_PUBLIC; c.name = original.name; c.superName = "java/lang/Object";
         c.interfaces.add("QuadSortTest$Sorter");
@@ -32,14 +43,31 @@ public final class QuadSortTest implements Opcodes {
         wrapper.visitVarInsn(ALOAD, 0); wrapper.visitVarInsn(DLOAD, 3); wrapper.visitVarInsn(DLOAD, 5); wrapper.visitVarInsn(DLOAD, 7);
         wrapper.visitMethodInsn(INVOKEVIRTUAL, c.name, "Ó00000", "(DDD)V"); wrapper.visitInsn(RETURN); c.methods.add(wrapper);
         String name = "SortFixture" + serial++;
+        Map<String, String> aliases = new HashMap<String, String>(); aliases.put(c.name, name);
+        for (String companion : companions.keySet()) aliases.put(companion, name + "$Comparator");
+        final Map<String, byte[]> definitions = new HashMap<String, byte[]>();
+        for (ClassNode comparator : companions.values()) {
+            ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            // Expand frames for ASM's stock remapper used only in this fixture.
+            ClassWriter originalWriter = new ClassWriter(0); comparator.accept(originalWriter);
+            new ClassReader(originalWriter.toByteArray()).accept(new RemappingClassAdapter(writer, new SimpleRemapper(aliases)), ClassReader.EXPAND_FRAMES);
+            definitions.put(aliases.get(comparator.name), writer.toByteArray());
+        }
         // Recompute fixture frames after adding the entry hook and remapping.
         // Keep the original compressed frames until fingerprint validation.
         for (MethodNode m : c.methods) for (AbstractInsnNode insn : m.instructions.toArray())
             if (insn instanceof FrameNode) m.instructions.remove(insn);
         ClassWriter out = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
-        c.accept(new RemappingClassAdapter(out, new SimpleRemapper(c.name, name)));
-        final byte[] bytes = out.toByteArray();
-        Class<?> type = new ClassLoader(QuadSortTest.class.getClassLoader()) { Class<?> define() { return defineClass(null, bytes, 0, bytes.length); } }.define();
+        c.accept(new RemappingClassAdapter(out, new SimpleRemapper(aliases)));
+        definitions.put(name, out.toByteArray());
+        ClassLoader loader = new ClassLoader(QuadSortTest.class.getClassLoader()) {
+            protected Class<?> findClass(String binaryName) throws ClassNotFoundException {
+                byte[] bytes = definitions.get(binaryName);
+                if (bytes == null) throw new ClassNotFoundException(binaryName);
+                return defineClass(binaryName, bytes, 0, bytes.length);
+            }
+        };
+        Class<?> type = Class.forName(name, true, loader);
         return (Sorter)type.newInstance();
     }
     static int[] data(int n, int kind, Random random) {

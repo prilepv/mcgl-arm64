@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 workspace_dir=${script_dir:h:h}
-version=1.7.2
+version=1.7.3
 dependency_root=${MCGL_BUILD_INPUTS:-$script_dir}
 output_root=${MCGL_RELEASE_OUTPUT_ROOT:-$workspace_dir/dist}
 release_name="Minecraft-Galaxy-ARM64-Bootstrap-${version}"
@@ -123,12 +123,15 @@ lwjgl_patch_classes=$(mktemp -d /private/tmp/mcgl-lwjgl-classes.XXXXXX)
     -C "$lwjgl_patch_classes" org/lwjgl/opengl
 
 "$java_source/bin/javac" -encoding UTF-8 --release 8 \
+    -cp "$resources_dir/PatchTools/asm-debug-all.jar" \
     -d "$resources_dir/PatchTools" \
     "$script_dir/native-window-patch/ClassBytePatch.java"
 "$java_source/bin/javac" -encoding UTF-8 --release 8 \
     -cp "$resources_dir/PatchTools/asm-debug-all.jar:$resources_dir/PortSupport/bin/lwjgl.jar" \
     -d "$resources_dir/PatchTools" \
     "$script_dir/tools/PatchMCGLFullscreen.java" \
+    "$script_dir/tools/MCGLBytecodeFingerprint.java" \
+    "$script_dir/tools/MCGLClientCompatibility.java" \
     "$script_dir/tools/PatchMCGLPerformance.java" \
     "$script_dir/tools/PatchMCGLLightmap.java" \
     "$script_dir/tools/PatchMCGLChunkVbo.java" \
@@ -140,6 +143,7 @@ lwjgl_patch_classes=$(mktemp -d /private/tmp/mcgl-lwjgl-classes.XXXXXX)
     "$script_dir/performance-patch/src/local/mcgl/perf/AnimationCache.java" \
     "$script_dir/performance-patch/src/local/mcgl/perf/LightmapCache.java" \
     "$script_dir/performance-patch/src/local/mcgl/perf/RenderDiagnostics.java"
+ditto "$script_dir/tools/client-profiles" "$resources_dir/PatchTools/client-profiles"
 
 bash "$script_dir/tools/build-glfw-support.sh" \
     "$dependency_root/lwjgl2-modern" "$java_source" "$resources_dir" \

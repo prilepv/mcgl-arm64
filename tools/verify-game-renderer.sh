@@ -28,6 +28,7 @@ ditto "$result_dir/renderer/classes" "$result_dir/classes"
     "$source_root/tests/render/OriginalChunkCacheProbe.java" \
     "$source_root/tests/render/OriginalChunkEmitter.java" "$source_root/tests/render/GameTextProbe.java" "$source_root/tests/render/GameTerrainBatchProbe.java" "$source_root/tests/render/GameTerrainRecoveryProbe.java" "$source_root/tests/render/GameTerrainFormatTest.java" "$source_root/tests/render/GameRendererProbe.java"
 "$jdk_root/bin/javac" --release 8 -encoding UTF-8 -cp "$asm" -d "$result_dir/tools" \
+    "$source_root/tools/MCGLBytecodeFingerprint.java" \
     "$source_root/tools/RenderCommandSpec.java" "$source_root/tools/PatchMCGLGame.java" "$source_root/tests/render/GameAdapterTest.java" "$source_root/tests/render/OriginalChunkAdapterTest.java" "$source_root/tests/render/FontAdapterTest.java"
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.GameInputsTest "$4"
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.backend.GameChunkTexturesTest

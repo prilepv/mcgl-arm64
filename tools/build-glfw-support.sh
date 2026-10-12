@@ -24,6 +24,7 @@ mkdir -p "$build_root/classes" "$build_root/compat" "$build_root/bootstrap"
 "$jdk_root/bin/javac" --release 8 -encoding UTF-8 -cp "$asm" -d "$patch_tools" \
     "$source_root/tools/PatchMCGLLwjgl3.java" "$source_root/tests/lwjgl3/LWJGL3LinkageAudit.java" \
     "$source_root/tools/RenderCommandSpec.java" "$source_root/tools/PatchMCGLRenderer.java" \
+    "$source_root/tools/MCGLBytecodeFingerprint.java" \
     "$source_root/tools/PatchMCGLChunks.java" "$source_root/tools/PatchMCGLGame.java"
 ditto "$source_root/renderer/legacy-commands.txt" "$patch_tools/render-commands.txt"
 "$jdk_root/bin/javac" --release 8 -d "$build_root/classes" \

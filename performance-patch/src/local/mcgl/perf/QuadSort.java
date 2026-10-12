@@ -14,6 +14,14 @@ public final class QuadSort {
     private static final AtomicLong batches = new AtomicLong(), quads = new AtomicLong(), ordered = new AtomicLong();
 
     public static boolean sort(int[] raw, int words, double x, double y, double z) {
+        return sort(raw, words, x, y, z, false);
+    }
+    /** October upstream uses double halving and Double.compare, including NaNs.
+     * Retain those exact semantics while avoiding boxed indices and per-call arrays. */
+    public static boolean sortUpdated(int[] raw, int words, double x, double y, double z) {
+        return sort(raw, words, x, y, z, true);
+    }
+    private static boolean sort(int[] raw, int words, double x, double y, double z, boolean updated) {
         if (!ENABLED || raw == null || words < 0 || words > raw.length || words > MAX_WORDS || (words & 31) != 0) return false;
         int count = words / 32;
         if (PROFILE) { batches.incrementAndGet(); quads.addAndGet(count); }
@@ -27,19 +35,23 @@ public final class QuadSort {
             int p = i * 32;
             // Deliberately retain float addition/division before conversion to
             // double. A 'more accurate' formula could reorder close distances.
-            double dx = x - (Float.intBitsToFloat(raw[p]) + Float.intBitsToFloat(raw[p + 16])) / 2.0f;
-            double dy = y - (Float.intBitsToFloat(raw[p + 1]) + Float.intBitsToFloat(raw[p + 17])) / 2.0f;
-            double dz = z - (Float.intBitsToFloat(raw[p + 2]) + Float.intBitsToFloat(raw[p + 18])) / 2.0f;
+            float sx = Float.intBitsToFloat(raw[p]) + Float.intBitsToFloat(raw[p + 16]);
+            float sy = Float.intBitsToFloat(raw[p + 1]) + Float.intBitsToFloat(raw[p + 17]);
+            float sz = Float.intBitsToFloat(raw[p + 2]) + Float.intBitsToFloat(raw[p + 18]);
+            double dx = x - (updated ? sx * 0.5 : sx / 2.0f);
+            double dy = y - (updated ? sy * 0.5 : sy / 2.0f);
+            double dz = z - (updated ? sz * 0.5 : sz / 2.0f);
             distance[i] = dx * dx + dy * dy + dz * dz;
             work.order[i] = i;
-            if (i > 0 && distance[i - 1] < distance[i]) alreadyOrdered = false;
+            if (i > 0 && (updated ? Double.compare(distance[i - 1], distance[i]) < 0 : distance[i - 1] < distance[i])) alreadyOrdered = false;
         }
         if (alreadyOrdered) { if (PROFILE) ordered.incrementAndGet(); return true; }
-        for (int begin = 0; begin < count;) {
+        if (updated) mergeSort(work, 0, count, true);
+        else for (int begin = 0; begin < count;) {
             if (Double.isNaN(distance[begin])) { begin++; continue; }
             int end = begin + 1;
             while (end < count && !Double.isNaN(distance[end])) end++;
-            mergeSort(work, begin, end);
+            mergeSort(work, begin, end, false);
             begin = end;
         }
         if (work.vertices.length < words) work.vertices = new int[work.order.length * 32];
@@ -47,15 +59,18 @@ public final class QuadSort {
         System.arraycopy(work.vertices, 0, raw, 0, words);
         return true;
     }
-    private static void mergeSort(Scratch w, int begin, int end) {
+    private static boolean before(double a, double b, boolean updated) {
+        return updated ? Double.compare(a, b) >= 0 : a >= b;
+    }
+    private static void mergeSort(Scratch w, int begin, int end, boolean updated) {
         for (int width = 1; width < end - begin; width *= 2) {
             for (int left = begin; left < end - width; left += width * 2) {
                 int middle = left + width, right = Math.min(left + width * 2, end);
                 // Already ordered adjacent runs need neither a merge nor a copy.
-                if (w.distance[w.order[middle - 1]] >= w.distance[w.order[middle]]) continue;
+                if (before(w.distance[w.order[middle - 1]], w.distance[w.order[middle]], updated)) continue;
                 int a = left, b = middle;
                 for (int target = left; target < right; target++) {
-                    if (b == right || (a < middle && w.distance[w.order[a]] >= w.distance[w.order[b]])) w.temp[target] = w.order[a++];
+                    if (b == right || (a < middle && before(w.distance[w.order[a]], w.distance[w.order[b]], updated))) w.temp[target] = w.order[a++];
                     else w.temp[target] = w.order[b++];
                 }
                 System.arraycopy(w.temp, left, w.order, left, right - left);
