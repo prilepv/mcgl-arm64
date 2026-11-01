@@ -9,8 +9,17 @@ The staging adapter accepts exactly these SHA-256 inputs:
 | --- | --- |
 | Original 1.7.2 input | `d014597ec18c5cda9622b2e5964eb2871e04b3e267d944bbbbb06e7f31f08786` |
 | Updated client inspected 2026-10-12 | `be89b9beca87d446c67321f2d74881cc11146fc2c92703693de360729e204ede` |
+| Updated client inspected 2026-11-01 | `d1ab619cc51864fb9ee785b891b21a5ca46e18fd4a70668e2d0585f1824c0f05` |
 
 The updated input's official MD5 is `1ef465d610a107259ac7e3b23df9afd3`.
+The November input's MD5 is `93732530647cb0cbb1044aabc2ee4bb1`; its separate
+`official-93732530.tsv` profile is independently hash-pinned. The selected
+profile is passed explicitly through normalization and restoration, without
+mutable global state. Both updated inputs contain 2568 classes and 879 resources.
+November's guarded render methods retain the reviewed October instructions;
+new exact method aliases only cover independently decoded XOR-key changes.
+The new input retains October's metadata render-pass and stable quad-sort rules.
+
 `official-1ef465d6.tsv` contains a complete bijection: `C old-class new-class`,
 `F/M old-owner old-member old-descriptor new-member` (tab separated). Canonical
 names identify the existing 1.7.2 patch targets. Added classes and colliding new

@@ -7,7 +7,7 @@ import org.objectweb.asm.*;
 import org.objectweb.asm.commons.*;
 import org.objectweb.asm.tree.*;
 
-/** Reversible, hash-pinned staging names for the reviewed October MCGL update.
+/** Reversible, hash-pinned staging names for reviewed official MCGL updates.
  * Never load game classes or rewrite reflection strings. Only staging JARs use
  * canonical names; restore the official namespace before publishing any files.
  */
@@ -16,6 +16,16 @@ public final class MCGLClientCompatibility {
     static final String UPDATED_SHA = "be89b9beca87d446c67321f2d74881cc11146fc2c92703693de360729e204ede";
     static final String PROFILE = "/client-profiles/official-1ef465d6.tsv";
     static final String PROFILE_SHA = "3b6c5d1ce8c3063f66da904705c74ece4c3718cc8294194291e3df6f12a6b60f";
+    static final String NOVEMBER_SHA = "d1ab619cc51864fb9ee785b891b21a5ca46e18fd4a70668e2d0585f1824c0f05";
+    static final class Profile {
+        final String name, resource, sha;
+        Profile(String name, String resource, String sha) {
+            this.name = name; this.resource = resource; this.sha = sha;
+        }
+    }
+    static final Profile OCTOBER = new Profile("official-1ef465d6", PROFILE, PROFILE_SHA);
+    static final Profile NOVEMBER = new Profile("official-93732530", "/client-profiles/official-93732530.tsv",
+            "94efd71fa59e99682dc5e8ad77bfb25feb2ac9339650a3c5b0921d8873e94842");
 
     static final class Names extends Remapper {
         final Map<String, String> classes = new HashMap<String, String>();
@@ -86,11 +96,15 @@ public final class MCGLClientCompatibility {
     }
 
     static Names names(boolean restore, Map<String, ClassNode> hierarchy) throws IOException {
+        return names(restore, hierarchy, OCTOBER);
+    }
+
+    static Names names(boolean restore, Map<String, ClassNode> hierarchy, Profile selected) throws IOException {
         byte[] profile;
-        try (InputStream input = MCGLClientCompatibility.class.getResourceAsStream(PROFILE)) {
+        try (InputStream input = MCGLClientCompatibility.class.getResourceAsStream(selected.resource)) {
             require(input != null, "Missing official-client compatibility profile"); profile = read(input);
         }
-        require(MCGLBytecodeFingerprint.sha256(profile).equals(PROFILE_SHA), "Changed compatibility profile");
+        require(MCGLBytecodeFingerprint.sha256(profile).equals(selected.sha), "Changed compatibility profile");
         List<String[]> records = new ArrayList<String[]>(); Names forward = new Names(Collections.<String, ClassNode>emptyMap());
         Set<String> targets = new HashSet<String>();
         for (String line : new String(profile, StandardCharsets.UTF_8).split("\n")) {
@@ -149,7 +163,11 @@ public final class MCGLClientCompatibility {
     }
 
     static LinkedHashMap<String, byte[]> normalize(Map<String, byte[]> original) throws IOException {
-        Names names = names(false, hierarchy(original));
+        return normalize(original, OCTOBER);
+    }
+
+    static LinkedHashMap<String, byte[]> normalize(Map<String, byte[]> original, Profile selected) throws IOException {
+        Names names = names(false, hierarchy(original), selected);
         LinkedHashMap<String, byte[]> result = new LinkedHashMap<String, byte[]>();
         for (Map.Entry<String, byte[]> entry : original.entrySet()) {
             String path = entry.getKey(); byte[] bytes = entry.getValue();
@@ -158,7 +176,7 @@ public final class MCGLClientCompatibility {
         }
         // Check every method, field, frame, constant and class attribute without
         // loading the game. Future changes to this adapter must still round-trip.
-        Names inverse = names(true, hierarchy(result));
+        Names inverse = names(true, hierarchy(result), selected);
         for (Map.Entry<String, byte[]> entry : result.entrySet()) if (entry.getKey().endsWith(".class")) {
             byte[] restored = transform(entry.getValue(), inverse);
             String official = new ClassReader(restored).getClassName() + ".class";
@@ -169,9 +187,13 @@ public final class MCGLClientCompatibility {
     }
 
     static LinkedHashMap<String, byte[]> restore(Map<String, byte[]> original, Map<String, byte[]> patched) throws IOException {
-        Map<String, byte[]> normalized = normalize(original);
+        return restore(original, patched, OCTOBER);
+    }
+
+    static LinkedHashMap<String, byte[]> restore(Map<String, byte[]> original, Map<String, byte[]> patched, Profile selected) throws IOException {
+        Map<String, byte[]> normalized = normalize(original, selected);
         require(patched.keySet().containsAll(normalized.keySet()), "Patched client lost official entries");
-        Names names = names(true, hierarchy(patched));
+        Names names = names(true, hierarchy(patched), selected);
         LinkedHashMap<String, byte[]> result = new LinkedHashMap<String, byte[]>();
         for (Map.Entry<String, byte[]> entry : patched.entrySet()) {
             String path = entry.getKey(); byte[] bytes = entry.getValue();
@@ -192,9 +214,14 @@ public final class MCGLClientCompatibility {
     }
 
     static boolean updated(Path official) throws IOException {
+        return profile(official) != null;
+    }
+
+    static Profile profile(Path official) throws IOException {
         String sha = MCGLBytecodeFingerprint.sha256(Files.readAllBytes(official));
-        if (ORIGINAL_SHA.equals(sha)) return false;
-        if (UPDATED_SHA.equals(sha)) return true;
+        if (ORIGINAL_SHA.equals(sha)) return null;
+        if (UPDATED_SHA.equals(sha)) return OCTOBER;
+        if (NOVEMBER_SHA.equals(sha)) return NOVEMBER;
         throw new IOException("MCGL_UNSUPPORTED_CLIENT: official mcgl.jar SHA-256=" + sha + "; launcher compatibility update required");
     }
 
@@ -217,13 +244,13 @@ public final class MCGLClientCompatibility {
         require(restoring || args.length == 3 && args[0].equals("normalize"),
                 "Usage: normalize official.jar NEW-output.jar | restore official.jar patched.jar NEW-output.jar");
         Path official = Paths.get(args[1]); Path output = Paths.get(args[args.length - 1]);
-        boolean updated = updated(official);
-        if (!updated) Files.copy(restoring ? Paths.get(args[2]) : official, output);
+        Profile selected = profile(official);
+        if (selected == null) Files.copy(restoring ? Paths.get(args[2]) : official, output);
         else {
             Map<String, byte[]> original = readJar(official);
-            write(output, restoring ? restore(original, readJar(Paths.get(args[2]))) : normalize(original));
+            write(output, restoring ? restore(original, readJar(Paths.get(args[2])), selected) : normalize(original, selected));
         }
-        System.out.println("CLIENT_COMPATIBILITY_PASS mode=" + args[0] + " profile=" + (updated ? "official-1ef465d6" : "original"));
+        System.out.println("CLIENT_COMPATIBILITY_PASS mode=" + args[0] + " profile=" + (selected == null ? "original" : selected.name));
     }
 
     static void require(boolean ok, String reason) throws IOException { if (!ok) throw new IOException(reason); }

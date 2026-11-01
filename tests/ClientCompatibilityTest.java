@@ -14,8 +14,9 @@ public final class ClientCompatibilityTest {
         require(!MCGLClientCompatibility.updated(original), "Original profile");
         require(MCGLClientCompatibility.updated(updated), "Updated profile");
         Map<String, byte[]> input = MCGLClientCompatibility.readJar(updated);
-        Map<String, byte[]> normalized = MCGLClientCompatibility.normalize(input);
-        Map<String, byte[]> restored = MCGLClientCompatibility.restore(input, normalized);
+        MCGLClientCompatibility.Profile selected = MCGLClientCompatibility.profile(updated);
+        Map<String, byte[]> normalized = MCGLClientCompatibility.normalize(input, selected);
+        Map<String, byte[]> restored = MCGLClientCompatibility.restore(input, normalized, selected);
         require(input.keySet().equals(restored.keySet()), "Roundtrip entries");
         for (String path : input.keySet()) require(Arrays.equals(input.get(path), restored.get(path)), "Changed original bytes: " + path);
         int aliases = 0, sorters = 0;
