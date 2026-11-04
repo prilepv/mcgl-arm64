@@ -15,6 +15,9 @@ struct MCGLChangelogEntry {
 
 enum MCGLChangelog {
     static let entries: [MCGLChangelogEntry] = [
+        MCGLChangelogEntry(version: "1.7.5", date: "4 ноября 2026", title: "Исправление запуска", points: [
+            "Исправлен запуск игры после обновления официального клиента MCGL."
+        ]),
         MCGLChangelogEntry(version: "1.7.4", date: "1 ноября 2026", title: "Поддержка нового официального клиента", points: [
             "Восстановлен запуск после очередного обновления официального клиента MCGL.",
             "Добавлен отдельный проверенный профиль совместимости; прежние версии клиента также поддерживаются.",

@@ -3,6 +3,8 @@ flat in vec4 vFlatColor;
 in vec3 vEyePosition, vUv, vLightmap;
 uniform int uTextured, uLightmapped, uFlat, uFogMode, uFogDistance;
 uniform sampler2D uTexture, uLightmap;
+uniform int uConstantTextureCombine;
+uniform vec4 uTextureConstant;
 
 float fogFactor() {
     float distance = uFogDistance == 1 ? length(vEyePosition) : abs(vEyePosition.z);
@@ -19,7 +21,10 @@ float fogFactor() {
 }
 void main() {
     vec4 color = uFlat != 0 ? vFlatColor : vColor;
-    if (uTextured != 0) color *= mcglTextureProj(uTexture, vUv);
+    if (uTextured != 0) {
+        vec4 texel = mcglTextureProj(uTexture, vUv);
+        color *= uConstantTextureCombine != 0 ? vec4(uTextureConstant.rgb, texel.a) : texel;
+    }
     if (uLightmapped != 0) color *= textureProj(uLightmap, vLightmap);
     if (!mcglAlphaPass(color.a)) discard;
     if (uFogMode != 0) color.rgb = mix(uGameFog.color.rgb, color.rgb, fogFactor());

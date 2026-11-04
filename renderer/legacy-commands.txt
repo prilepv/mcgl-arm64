@@ -99,6 +99,7 @@ org/lwjgl/opengl/MCGLGL11 glColor3b (BBB)V
 org/lwjgl/opengl/MCGLGL11 glColor3f (FFF)V
 org/lwjgl/opengl/MCGLGL11 glColor3ub (BBB)V
 org/lwjgl/opengl/MCGLGL11 glColor4f (FFFF)V
+org/lwjgl/opengl/MCGLGL11 glColor4d (DDDD)V
 org/lwjgl/opengl/MCGLGL11 glColor4ub (BBBB)V
 org/lwjgl/opengl/MCGLGL11 glColorMask (ZZZZ)V
 org/lwjgl/opengl/MCGLGL11 glColorMaterial (II)V
@@ -162,16 +163,19 @@ org/lwjgl/opengl/MCGLGL11 glShadeModel (I)V
 org/lwjgl/opengl/MCGLGL11 glStencilFunc (III)V
 org/lwjgl/opengl/MCGLGL11 glStencilOp (III)V
 org/lwjgl/opengl/MCGLGL11 glTexCoord2f (FF)V
+org/lwjgl/opengl/MCGLGL11 glTexCoord2d (DD)V
 org/lwjgl/opengl/MCGLGL11 glTexCoordPointer (IIIJ)V
 org/lwjgl/opengl/MCGLGL11 glTexCoordPointer (IILjava/nio/FloatBuffer;)V
 org/lwjgl/opengl/MCGLGL11 glTexCoordPointer (IILjava/nio/ShortBuffer;)V
 org/lwjgl/opengl/MCGLGL11 glTexEnvi (III)V
+org/lwjgl/opengl/MCGLGL11 glTexEnv (IILjava/nio/FloatBuffer;)V
 org/lwjgl/opengl/MCGLGL11 glTexImage2D (IIIIIIIILjava/nio/ByteBuffer;)V
 org/lwjgl/opengl/MCGLGL11 glTexParameteri (III)V
 org/lwjgl/opengl/MCGLGL11 glTexSubImage2D (IIIIIIIILjava/nio/ByteBuffer;)V
 org/lwjgl/opengl/MCGLGL11 glTranslated (DDD)V
 org/lwjgl/opengl/MCGLGL11 glTranslatef (FFF)V
 org/lwjgl/opengl/MCGLGL11 glVertex2f (FF)V
+org/lwjgl/opengl/MCGLGL11 glVertex2d (DD)V
 org/lwjgl/opengl/MCGLGL11 glVertex3d (DDD)V
 org/lwjgl/opengl/MCGLGL11 glVertex3f (FFF)V
 org/lwjgl/opengl/MCGLGL11 glVertexPointer (IIIJ)V

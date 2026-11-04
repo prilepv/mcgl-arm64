@@ -4,11 +4,12 @@ import Foundation
 struct ChangelogTest {
     static func main() {
         let entries = MCGLChangelog.entries
-        precondition(entries.map(\.version) == ["1.7.4", "1.7.3", "1.7.2", "1.7.1", "1.7.0", "1.6.7", "1.6.6", "1.6.5", "1.6.4"])
+        precondition(entries.map(\.version) == ["1.7.5", "1.7.4", "1.7.3", "1.7.2", "1.7.1", "1.7.0", "1.6.7", "1.6.6", "1.6.5", "1.6.4"])
+        precondition(entries.first!.points == ["Исправлен запуск игры после обновления официального клиента MCGL."])
         precondition(MCGLLauncherUpdater.currentVersion == entries.first!.version)
         for (index, entry) in entries.enumerated() {
             precondition(!entry.date.isEmpty && !entry.title.isEmpty)
-            precondition((3...5).contains(entry.points.count))
+            precondition((1...5).contains(entry.points.count))
             precondition(entry.points.allSatisfy { !$0.isEmpty && $0.count < 180 })
             precondition(entry.releaseURL.scheme == "https" && entry.releaseURL.host == "github.com")
             precondition(entry.releaseURL.path == "/prilepv/mcgl-arm64/releases/tag/v\(entry.version)")
@@ -21,9 +22,9 @@ struct ChangelogTest {
         precondition(preferences.lastReadChangelogVersion == nil)
         preferences.maximumMemoryMB = 4096
         preferences.fpsLimit = 144
-        preferences.lastReadChangelogVersion = "1.7.4"
-        precondition(MCGLLauncherPreferences(defaults: defaults).lastReadChangelogVersion == "1.7.4")
+        preferences.lastReadChangelogVersion = "1.7.5"
+        precondition(MCGLLauncherPreferences(defaults: defaults).lastReadChangelogVersion == "1.7.5")
         precondition(preferences.maximumMemoryMB == 4096 && preferences.fpsLimit == 144)
-        print("CHANGELOG_PASS nine concise public releases, descending versions, exact HTTPS links, offline data, independent read marker")
+        print("CHANGELOG_PASS ten public releases, single factual 1.7.5 fix, descending versions, exact HTTPS links, offline data, independent read marker")
     }
 }

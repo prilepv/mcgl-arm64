@@ -19,8 +19,16 @@ public final class MCGLClientCompatibility {
     static final String NOVEMBER_SHA = "d1ab619cc51864fb9ee785b891b21a5ca46e18fd4a70668e2d0585f1824c0f05";
     static final class Profile {
         final String name, resource, sha;
+        final byte[] external;
+        final int classes;
         Profile(String name, String resource, String sha) {
             this.name = name; this.resource = resource; this.sha = sha;
+            this.external = null; this.classes = 2568;
+        }
+        Profile(MCGLCompatibilityPack pack) {
+            this.name = "signed-" + pack.client.substring(0, 8); this.resource = null;
+            this.external = pack.mapping; this.sha = MCGLBytecodeFingerprint.sha256(pack.mapping);
+            this.classes = pack.classes;
         }
     }
     static final Profile OCTOBER = new Profile("official-1ef465d6", PROFILE, PROFILE_SHA);
@@ -101,7 +109,8 @@ public final class MCGLClientCompatibility {
 
     static Names names(boolean restore, Map<String, ClassNode> hierarchy, Profile selected) throws IOException {
         byte[] profile;
-        try (InputStream input = MCGLClientCompatibility.class.getResourceAsStream(selected.resource)) {
+        try (InputStream input = selected.external == null
+                ? MCGLClientCompatibility.class.getResourceAsStream(selected.resource) : new ByteArrayInputStream(selected.external)) {
             require(input != null, "Missing official-client compatibility profile"); profile = read(input);
         }
         require(MCGLBytecodeFingerprint.sha256(profile).equals(selected.sha), "Changed compatibility profile");
@@ -115,7 +124,7 @@ public final class MCGLClientCompatibility {
                 require(forward.classes.put(parts[1], parts[2]) == null && targets.add(parts[2]), "Non-bijective class profile");
             }
         }
-        require(forward.classes.size() == 2568, "Incomplete class profile");
+        require(forward.classes.size() == selected.classes, "Incomplete class profile");
         Names result = new Names(hierarchy);
         for (Map.Entry<String, String> entry : forward.classes.entrySet())
             result.classes.put(restore ? entry.getKey() : entry.getValue(), restore ? entry.getValue() : entry.getKey());
@@ -222,6 +231,8 @@ public final class MCGLClientCompatibility {
         if (ORIGINAL_SHA.equals(sha)) return null;
         if (UPDATED_SHA.equals(sha)) return OCTOBER;
         if (NOVEMBER_SHA.equals(sha)) return NOVEMBER;
+        MCGLCompatibilityPack pack = MCGLCompatibilityPack.active();
+        if (pack != null && pack.client.equals(sha)) return new Profile(pack);
         throw new IOException("MCGL_UNSUPPORTED_CLIENT: official mcgl.jar SHA-256=" + sha + "; launcher compatibility update required");
     }
 
@@ -240,6 +251,12 @@ public final class MCGLClientCompatibility {
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 2 && args[0].equals("probe")) {
+            String sha = MCGLBytecodeFingerprint.sha256(Files.readAllBytes(Paths.get(args[1])));
+            System.out.println(ORIGINAL_SHA.equals(sha) || UPDATED_SHA.equals(sha) || NOVEMBER_SHA.equals(sha)
+                    ? "BUNDLED_PROFILE" : "SIGNED_PACK_REQUIRED");
+            return;
+        }
         boolean restoring = args.length == 4 && args[0].equals("restore");
         require(restoring || args.length == 3 && args[0].equals("normalize"),
                 "Usage: normalize official.jar NEW-output.jar | restore official.jar patched.jar NEW-output.jar");

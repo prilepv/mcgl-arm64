@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 workspace_dir=${script_dir:h:h}
-version=1.7.4
+version=1.7.5
 dependency_root=${MCGL_BUILD_INPUTS:-$script_dir}
 output_root=${MCGL_RELEASE_OUTPUT_ROOT:-$workspace_dir/dist}
 release_name="Minecraft-Galaxy-ARM64-Bootstrap-${version}"
@@ -131,6 +131,7 @@ lwjgl_patch_classes=$(mktemp -d /private/tmp/mcgl-lwjgl-classes.XXXXXX)
     -d "$resources_dir/PatchTools" \
     "$script_dir/tools/PatchMCGLFullscreen.java" \
     "$script_dir/tools/MCGLBytecodeFingerprint.java" \
+    "$script_dir/tools/MCGLCompatibilityPack.java" \
     "$script_dir/tools/MCGLClientCompatibility.java" \
     "$script_dir/tools/PatchMCGLPerformance.java" \
     "$script_dir/tools/PatchMCGLLightmap.java" \

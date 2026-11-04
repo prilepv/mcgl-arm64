@@ -15,6 +15,7 @@ mkdir -p "$result_dir/tools"
 bash "$source_root/tools/build-render-support.sh" "$jdk_root" "$library" "$asm" "$result_dir/renderer"
 "$jdk_root/bin/javac" --release 8 -encoding UTF-8 -cp "$asm:$result_dir/renderer/classes" -d "$result_dir/tools" \
     "$source_root/tools/MCGLBytecodeFingerprint.java" \
+    "$source_root/tools/MCGLCompatibilityPack.java" \
     "$source_root/tools/RenderCommandSpec.java" "$source_root/tools/PatchMCGLGame.java" \
     "$source_root/tests/render/OriginalTerrainScopePatchTest.java"
 "$jdk_root/bin/java" -cp "$resources/PatchTools:$asm" PatchMCGLGame "$original" "$result_dir/released.jar" \

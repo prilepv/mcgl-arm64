@@ -17,9 +17,10 @@ final class MCGLInstaller {
     private let jarExecutableURL: URL
     private let resolverLock = NSLock()
     private var resolvedAddressCache: [String: [String]] = [:]
+    private var activeCompatibilityPack: (pack: URL, official: URL)?
     // Separate from launcher version. LWJGL 3 requires fresh original JARs
     // before the existing game transforms and the final binding-only adapter.
-    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-16\n"
+    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,
         URL(string: "http://f3.mcgl.ru/mclient/")!,
@@ -82,8 +83,13 @@ final class MCGLInstaller {
                                         withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: temporaryURL) }
 
+        // Import only a completed, recognized core-16 installation. This lets
+        // the first upgraded launcher offer its existing client if MCGL moved on.
+        try? adoptPreviouslyPreparedClient()
         progress("Получение официального списка файлов MCGL…")
-        let (manifestData, versionData, preferredMirrors) = try fetchVerifiedManifest()
+        let manifestData: Data, versionData: Data, preferredMirrors: [URL]
+        do { (manifestData, versionData, preferredMirrors) = try fetchVerifiedManifest() }
+        catch { throw Self.compatibilityUnavailable("не удалось проверить обновления MCGL: \(error.localizedDescription)") }
         let entries = try parseManifest(manifestData)
             .filter { $0.path != "version.md5" }
         guard !entries.isEmpty else {
@@ -102,7 +108,7 @@ final class MCGLInstaller {
 
         let markerURL = gameDirectoryURL.appendingPathComponent(".arm64-port-version")
         let installedMarker = try? String(contentsOf: markerURL, encoding: .utf8)
-        let needsPortRefresh = installedMarker != portMarker
+        let needsPortRefresh = installedMarker != portMarker || !canLaunchSavedClient()
         let portOwnedPaths = try portSupportPaths()
 
         progress(profileExists
@@ -147,16 +153,20 @@ final class MCGLInstaller {
             localVersionData != versionData || needsPortRefresh
 
         if entriesToDownload.isEmpty && removedPaths.isEmpty && !metadataChanged {
-            progress("Клиент MCGL обновлён не требуется.")
+            progress("Обновление клиента MCGL не требуется.")
             return
         }
 
         if !entriesToDownload.isEmpty {
             progress("Загрузка обновлений MCGL: 0%")
-            try download(entries: entriesToDownload,
-                         to: temporaryURL,
-                         mirrors: preferredMirrors,
-                         progress: progress)
+            do {
+                try download(entries: entriesToDownload,
+                             to: temporaryURL,
+                             mirrors: preferredMirrors,
+                             progress: progress)
+            } catch {
+                throw Self.compatibilityUnavailable("не удалось загрузить обновление MCGL: \(error.localizedDescription). Установленный клиент и настройки не изменены.")
+            }
         }
 
         try manifestData.write(to: temporaryURL.appendingPathComponent("update_f.lst"),
@@ -168,7 +178,7 @@ final class MCGLInstaller {
         try overlayPortSupport(from: portSupportURL, to: temporaryURL)
 
         progress("Проверка совместимости клиента и применение ARM64-патчей…")
-        try prepareStagedClient(in: temporaryURL)
+        try prepareStagedClient(in: temporaryURL, progress: progress)
 
         try Data(portMarker.utf8).write(
             to: temporaryURL.appendingPathComponent(".arm64-port-version"),
@@ -196,6 +206,67 @@ final class MCGLInstaller {
             try fileManager.moveItem(at: temporaryURL, to: gameDirectoryURL)
             progress("Официальный клиент загружен; ARM64-порт установлен.")
         }
+        try recordSavedClient()
+    }
+
+    private struct SavedClient: Codable {
+        let schema: Int
+        let abi: String
+        let hashes: [String: String]
+    }
+    private var savedReceiptURL: URL { supportRootURL.appendingPathComponent(".verified-client-core-17.json") }
+
+    private func criticalClientPaths() throws -> Set<String> {
+        var paths = try portSupportPaths()
+        paths.formUnion(["Minecraft.jar", "bin/mcgl.jar", "bin/lwjgl_util.jar", "update_f.lst", "version.md5", ".arm64-port-version"])
+        if let data = try? Data(contentsOf: gameDirectoryURL.appendingPathComponent("update_f.lst")) {
+            for entry in try parseManifest(data) where entry.path.hasSuffix(".jar") { paths.insert(entry.path) }
+        }
+        return paths
+    }
+    private func savedFile(_ path: String) throws -> URL {
+        try validate(relativePath: path)
+        let url = gameDirectoryURL.appendingPathComponent(path)
+        let root = gameDirectoryURL.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        guard url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root),
+              try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+            throw installerError("неполная сохранённая установка клиента")
+        }
+        return url
+    }
+    func canLaunchSavedClient() -> Bool {
+        do {
+            let info = try savedReceiptURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+            guard info.isRegularFile == true, info.isSymbolicLink != true, (info.fileSize ?? Int.max) <= 1024 * 1024 else { return false }
+            let receipt = try JSONDecoder().decode(SavedClient.self, from: Data(contentsOf: savedReceiptURL))
+            let required = try criticalClientPaths()
+            guard receipt.schema == 1, receipt.abi == "core-17", !receipt.hashes.isEmpty,
+                  receipt.hashes.count <= 4096, Set(receipt.hashes.keys) == required else { return false }
+            for (path, hash) in receipt.hashes {
+                guard hash.count == 64, try Self.sha256File(savedFile(path)) == hash else { return false }
+            }
+            return true
+        } catch { return false }
+    }
+    func recordSavedClient() throws {
+        let paths = try criticalClientPaths()
+        guard paths.count <= 4096 else { throw installerError("слишком много файлов в сохранённом клиенте") }
+        var hashes = [String: String]()
+        for path in paths { hashes[path] = try Self.sha256File(savedFile(path)) }
+        let receipt = SavedClient(schema: 1, abi: "core-17", hashes: hashes)
+        try JSONEncoder().encode(receipt).write(to: savedReceiptURL, options: .atomic)
+    }
+    func adoptPreviouslyPreparedClient() throws {
+        guard !fileManager.fileExists(atPath: savedReceiptURL.path),
+              let marker = try? String(contentsOf: gameDirectoryURL.appendingPathComponent(".arm64-port-version"), encoding: .utf8),
+              [portMarker, "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-16\n"].contains(marker),
+              let data = try? Data(contentsOf: gameDirectoryURL.appendingPathComponent("update_f.lst")) else { return }
+        let known: Set<String> = ["7a9a3f2b6853ae84f7a246059767cbee", "1ef465d610a107259ac7e3b23df9afd3", "93732530647cb0cbb1044aabc2ee4bb1"]
+        guard let client = try parseManifest(data).first(where: { $0.path == "bin/mcgl.jar" }), known.contains(client.md5) else { return }
+        _ = try runProcess(executable: javaExecutableURL, arguments: ["-cp",
+            patchToolsURL.path + ":" + patchToolsURL.appendingPathComponent("asm-debug-all.jar").path + ":" + gameDirectoryURL.appendingPathComponent("bin/lwjgl.jar").path,
+            "LWJGL3LinkageAudit", gameDirectoryURL.appendingPathComponent("bin/mcgl.jar").path])
+        try recordSavedClient()
     }
 
     static func enablingAlphaSort(in text: String) -> (text: String, changed: Bool) {
@@ -262,6 +333,18 @@ final class MCGLInstaller {
     private func md5(ofFileAt url: URL) throws -> String {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         return md5(data)
+    }
+
+    static func sha256File(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+        var hasher = SHA256()
+        while let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty { hasher.update(data: data) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func compatibilityUnavailable(_ message: String) -> NSError {
+        NSError(domain: "MinecraftGalaxyARM64.Compatibility", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message, "MCGLCompatibilityUnavailable": true])
     }
 
     private func applyStagedFiles(from stagingRoot: URL,
@@ -570,7 +653,7 @@ final class MCGLInstaller {
 
     // Only operates on a disposable staging tree. No installed files are applied
     // until normalization, all render patches and name restoration have succeeded.
-    func prepareStagedClient(in gameRoot: URL) throws {
+    func prepareStagedClient(in gameRoot: URL, progress: (String) -> Void = { _ in }) throws {
         guard gameRoot.resolvingSymlinksInPath().standardizedFileURL !=
                 gameDirectoryURL.resolvingSymlinksInPath().standardizedFileURL else {
             throw installerError("патчи разрешены только во временной папке обновления")
@@ -589,20 +672,44 @@ final class MCGLInstaller {
         let asmJar = patchToolsURL.appendingPathComponent("asm-debug-all.jar")
         let classpath = patchToolsURL.path + ":" + asmJar.path
         try fileManager.moveItem(at: gameJar, to: original)
-        _ = try runProcess(executable: javaExecutableURL, arguments: [
-            "-cp", classpath, "MCGLClientCompatibility", "normalize", original.path, gameJar.path
-        ])
-        try patchClient(in: gameRoot)
-        try adaptLWJGL(in: gameRoot)
-        _ = try runProcess(executable: javaExecutableURL, arguments: [
-            "-cp", classpath, "MCGLClientCompatibility", "restore", original.path, gameJar.path, restored.path
-        ])
-        _ = try runProcess(executable: javaExecutableURL, arguments: [
-            "-cp", classpath + ":" + gameRoot.appendingPathComponent("bin/lwjgl.jar").path,
-            "LWJGL3LinkageAudit", restored.path
-        ])
-        try fileManager.removeItem(at: gameJar)
-        try fileManager.moveItem(at: restored, to: gameJar)
+        defer { activeCompatibilityPack = nil }
+        let probe = try runProcess(executable: javaExecutableURL, arguments: [
+            "-cp", classpath, "MCGLClientCompatibility", "probe", original.path
+        ], captureStandardOutput: true)
+        if String(data: probe, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "SIGNED_PACK_REQUIRED" {
+            progress("Поиск подписанного пакета совместимости MCGL…")
+            let client = try Self.sha256File(original)
+            let packs = MCGLCompatibilityPacks(cache: supportRootURL.appendingPathComponent("Compatibility/core-17"))
+            do {
+                let pack = try packs.resolve(client: client) { candidate in
+                    _ = try self.runProcess(executable: self.javaExecutableURL, arguments: [
+                        "-cp", classpath, "MCGLCompatibilityPack", "verify", candidate.path, client
+                    ])
+                }
+                activeCompatibilityPack = (pack, original)
+                progress("Подпись и версия пакета совместимости проверены.")
+            } catch {
+                throw Self.compatibilityUnavailable("официальный клиент MCGL изменился и пока не поддерживается доступным пакетом совместимости. Пакет ещё не опубликован, недоступен или не прошёл проверку. Установленный клиент и настройки не изменены.")
+            }
+        }
+        do {
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-cp", classpath, "MCGLClientCompatibility", "normalize", original.path, gameJar.path
+            ])
+            try patchClient(in: gameRoot)
+            try adaptLWJGL(in: gameRoot)
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-cp", classpath, "MCGLClientCompatibility", "restore", original.path, gameJar.path, restored.path
+            ])
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-cp", classpath + ":" + gameRoot.appendingPathComponent("bin/lwjgl.jar").path,
+                "LWJGL3LinkageAudit", restored.path
+            ])
+            try fileManager.removeItem(at: gameJar)
+            try fileManager.moveItem(at: restored, to: gameJar)
+        } catch {
+            throw Self.compatibilityUnavailable("подготовка обновления MCGL не прошла проверку: \(error.localizedDescription). Установленный клиент и настройки не изменены.")
+        }
     }
 
     private func patchClient(in gameRoot: URL) throws {
@@ -729,7 +836,11 @@ final class MCGLInstaller {
                             captureStandardOutput: Bool = false) throws -> Data {
         let process = Process()
         process.executableURL = executable
-        process.arguments = arguments
+        if executable.standardizedFileURL == javaExecutableURL.standardizedFileURL,
+           let selected = activeCompatibilityPack {
+            process.arguments = ["-Dmcgl.compat.pack=\(selected.pack.path)",
+                                 "-Dmcgl.compat.official=\(selected.official.path)"] + arguments
+        } else { process.arguments = arguments }
         let output = Pipe()
         let errors = Pipe()
         process.standardOutput = output
@@ -782,5 +893,121 @@ final class MCGLInstaller {
     private func installerError(_ description: String) -> NSError {
         NSError(domain: "MCGLBootstrapInstaller", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: description])
+    }
+}
+
+/// Compatibility delivery is independent of application releases. Payloads are
+/// authenticated here and parsed/validated again by the Java patch tools.
+final class MCGLCompatibilityPacks {
+    static let publisherKey = "6bd7980e19d22ca3a68b0af6810fe06df4f6cd4d2f0e2d33291db276860e3c6e"
+    static let limit = 8 * 1024 * 1024
+    static let endpoint = URL(string: "https://raw.githubusercontent.com/prilepv/mcgl-arm64/compatibility/v1/core-17/")!
+    private let cache: URL
+    private let base: URL
+    private let transport: ((URL) throws -> Data)?
+
+    init(cache: URL, base: URL = endpoint, transport: ((URL) throws -> Data)? = nil) {
+        self.cache = cache; self.base = base; self.transport = transport
+    }
+
+    static func failure(_ text: String) -> NSError {
+        NSError(domain: "MinecraftGalaxyARM64.CompatibilityPack", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: text])
+    }
+
+    static func validateEnvelope(_ data: Data) throws {
+        guard data.count > 72, data.count <= limit, data.prefix(8) == Data("MCGLPK1\n".utf8) else {
+            throw failure("Некорректный размер или формат пакета совместимости.")
+        }
+        let raw = stride(from: 0, to: publisherKey.count, by: 2).map { offset -> UInt8 in
+            let start = publisherKey.index(publisherKey.startIndex, offsetBy: offset)
+            return UInt8(publisherKey[start..<publisherKey.index(start, offsetBy: 2)], radix: 16)!
+        }
+        let key = try Curve25519.Signing.PublicKey(rawRepresentation: Data(raw))
+        guard key.isValidSignature(data.subdata(in: 8..<72), for: data.dropFirst(72)) else {
+            throw failure("Подпись издателя пакета совместимости не прошла проверку.")
+        }
+    }
+
+    func resolve(client: String, verifyPayload: (URL) throws -> Void) throws -> URL {
+        guard client.count == 64, client.allSatisfy({ "0123456789abcdef".contains($0) }), base.scheme == "https" else {
+            throw Self.failure("Некорректный адрес или идентификатор пакета.")
+        }
+        let fm = FileManager.default, target = cache.appendingPathComponent(client + ".pack")
+        if fm.fileExists(atPath: target.path) {
+            do {
+                let size = try target.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+                guard size.isRegularFile == true, size.isSymbolicLink != true, (size.fileSize ?? Int.max) <= Self.limit else {
+                    throw Self.failure("Некорректный файл кэша совместимости.")
+                }
+                try Self.validateEnvelope(Data(contentsOf: target)); try verifyPayload(target)
+                return target
+            } catch { /* A corrupt cache must not suppress a fresh verified download. */ }
+        }
+        let url = base.appendingPathComponent(client + ".pack")
+        let data = try transport?(url) ?? BoundedPackRequest.fetch(url)
+        try Self.validateEnvelope(data)
+        try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        let candidate = cache.appendingPathComponent(".candidate-\(UUID().uuidString).pack")
+        try data.write(to: candidate, options: .withoutOverwriting)
+        defer { try? fm.removeItem(at: candidate) }
+        try verifyPayload(candidate)
+        // Retain the authenticated bytes, not a second read of a mutable temp file.
+        try data.write(to: target, options: .atomic)
+        return target
+    }
+}
+
+/// Serial URLSession delegate caps both declared and streamed response sizes.
+private final class BoundedPackRequest: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private var data = Data()
+    private var failure: Error?
+    private var accepted = false
+    private let finished = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var outcome: Result<Data, Error>?
+
+    static func fetch(_ url: URL) throws -> Data {
+        let delegate = BoundedPackRequest()
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15; config.timeoutIntervalForResource = 20
+        let queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url: url)
+        request.setValue("MCGL-ARM64-Compatibility/1", forHTTPHeaderField: "User-Agent")
+        session.dataTask(with: request).resume()
+        guard delegate.finished.wait(timeout: .now() + 25) == .success else {
+            throw MCGLCompatibilityPacks.failure("Истекло время загрузки пакета совместимости.")
+        }
+        delegate.lock.lock(); let result = delegate.outcome!; delegate.lock.unlock()
+        return try result.get()
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              response.url?.scheme == "https", response.expectedContentLength <= MCGLCompatibilityPacks.limit else {
+            failure = MCGLCompatibilityPacks.failure("Пакет совместимости недоступен или превышает допустимый размер.")
+            completionHandler(.cancel); return
+        }
+        accepted = true; completionHandler(.allow)
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        guard chunk.count <= MCGLCompatibilityPacks.limit - data.count else {
+            failure = MCGLCompatibilityPacks.failure("Пакет совместимости превышает допустимый размер.")
+            dataTask.cancel(); return
+        }
+        data.append(chunk)
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        if let issue = failure ?? error { outcome = .failure(issue) }
+        else if accepted { outcome = .success(data) }
+        else { outcome = .failure(MCGLCompatibilityPacks.failure("Некорректный ответ сервера пакетов.")) }
+        lock.unlock(); finished.signal()
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(request.url?.scheme == "https" ? request : nil)
     }
 }

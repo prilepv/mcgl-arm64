@@ -11,12 +11,14 @@ import org.lwjgl.opengl.*;
 public final class GameRendererProbe {
     private static int checks;
     public static void main(String[] args)throws Exception {
+        boolean offscreen=args.length==1&&args[0].equals("--offscreen");
         for(int lifetime=0;lifetime<2;lifetime++) {
             System.setProperty("mcgl.terrain.materials",Boolean.toString(lifetime!=0));
             System.setProperty("mcgl.terrain.wideArena",Boolean.toString(lifetime!=0));
             System.setProperty("mcgl.terrain.textureArrays",Boolean.toString(lifetime!=0));
             System.setProperty("mcgl.graphics.unlitShaders",Boolean.toString(lifetime!=0));
-            Display.setDisplayMode(new DisplayMode(300,220));Display.setTitle("MCGL — migrated game calls");MCGLCoreDisplay.create(new PixelFormat().withDepthBits(24).withStencilBits(8));
+            if(offscreen)OffscreenCoreContext.open();
+            else{Display.setDisplayMode(new DisplayMode(300,220));Display.setTitle("MCGL — migrated game calls");MCGLCoreDisplay.create(new PixelFormat().withDepthBits(24).withStencilBits(8));}
             GameRenderCommands g=RenderSystem.game();
             try {
                 check(RenderSystem.current().profile()==RenderProfile.CORE_41,"Core game context");
@@ -56,11 +58,11 @@ public final class GameRendererProbe {
                 checks+=GameTerrainMaterialsProbe.run(g);
                 AtomicReference<Throwable> failure=new AtomicReference<Throwable>();Thread foreign=new Thread(()->{try{g.glColor3f(1,1,1);}catch(Throwable e){failure.set(e);}});foreign.start();foreign.join();check(failure.get() instanceof IllegalStateException,"retained game facade enforces owner");
                 int cached=g.cachedModels();check(cached==3&&g.cachedModelDraws()>=5,"GPU model registry connected");g.glDeleteLists(model,3);check(g.cachedModels()==0,"model deletion retires meshes");
-                check(g.glGetError()==0,"all migrated game calls are Core-valid");g.GL30_glBindFramebuffer(GL30C.GL_FRAMEBUFFER,0);GL30C.glDeleteFramebuffers(fbo);GL30C.glDeleteRenderbuffers(color);Display.update();
-            }finally{Display.destroy();}
+                check(g.glGetError()==0,"all migrated game calls are Core-valid");g.GL30_glBindFramebuffer(GL30C.GL_FRAMEBUFFER,0);GL30C.glDeleteFramebuffers(fbo);GL30C.glDeleteRenderbuffers(color);if(!offscreen)Display.update();
+            }finally{if(offscreen)OffscreenCoreContext.close();else Display.destroy();}
             boolean stale=false;try{g.glColor3f(1,1,1);}catch(IllegalStateException expected){stale=true;}check(stale,"retained game facade invalidated");
         }
-        Display.shutdown();System.out.println("GAME_RENDERER_GPU_PASS checks="+checks);
+        if(!offscreen)Display.shutdown();System.out.println("GAME_RENDERER_GPU_PASS checks="+checks+" context="+(offscreen?"CGL-offscreen":"GLFW-window"));
     }
     private static void lines(GameRenderCommands g) {
         clear(g);g.glColor3f(1,0,0);g.glLineWidth(4);g.glEnable(GL11C.GL_CULL_FACE);g.glEnable(GL11C.GL_POLYGON_OFFSET_FILL);
@@ -75,6 +77,7 @@ public final class GameRendererProbe {
         g.glDeleteLists(handle,1);g.glLineWidth(1);
     }
     private static void textures(GameRenderCommands g) {
+        textureCombiner(g);
         int a=g.glGenTextures(),b=g.glGenTextures();g.glBindTexture(3553,a);g.glTexParameteri(3553,10241,9728);
         g.glPushAttrib(0x40000);g.glTexParameteri(3553,10241,9729);g.glBindTexture(3553,b);g.glTexParameteri(3553,10241,9728);g.glPopAttrib();
         check(GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D)==a&&GL11C.glGetTexParameteri(3553,10241)==9728,"texture scope restores bound object and its filter");
@@ -82,13 +85,44 @@ public final class GameRendererProbe {
         g.glPushAttrib(0x800);g.glTexParameteri(3553,10241,9729);g.glPopAttrib();check(GL11C.glGetTexParameteri(3553,10241)==9729,"non-texture group does not restore filter");
         g.glDeleteTextures(a);g.glDeleteTextures(b);check(GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D)==0,"deleted texture binding clears logical and native state");
     }
+    private static void textureCombiner(GameRenderCommands g) {
+        int texture=g.glGenTextures();g.glBindTexture(3553,texture);
+        g.glTexParameteri(3553,10241,9728);g.glTexParameteri(3553,10240,9728);
+        ByteBuffer texel=ByteBuffer.allocateDirect(4);texel.put(new byte[]{(byte)200,100,40,(byte)128}).flip();
+        g.glTexImage2D(3553,0,6408,1,1,0,6408,5121,texel);g.glEnable(3553);
+        g.glColor4d(.5,.8,1,.5);g.glTexCoord2d(.5,.5);
+        FloatBuffer color=ByteBuffer.allocateDirect(24).order(ByteOrder.nativeOrder()).asFloatBuffer();
+        color.put(new float[]{99,.4f,.5f,.25f,.9f,99});color.position(1);
+        g.glPushAttrib(0x40000);
+        g.glTexEnv(8960,8705,color);check(color.position()==1,"texture environment preserves relative buffer position");
+        g.glTexEnvi(8960,8704,34160);g.glTexEnvi(8960,34161,8448);
+        g.glTexEnvi(8960,34176,34166);g.glTexEnvi(8960,34192,768);
+        g.glTexEnvi(8960,34177,34168);g.glTexEnvi(8960,34193,768);
+        g.glTexEnvi(8960,34184,5890);g.glTexEnvi(8960,34200,770);
+        g.glTexEnvi(8960,34185,34168);g.glTexEnvi(8960,34201,770);
+        clear(g);doubleQuad(g);pixel(32,32,51,102,64,"new font combiner uses constant RGB instead of texture RGB");
+        ByteBuffer actual=ByteBuffer.allocateDirect(4);GL11C.glReadPixels(32,32,1,1,6408,5121,actual);
+        check(Math.abs((actual.get(3)&255)-64)<=2,"combiner alpha multiplies texture and previous alpha");
+        try(ShaderProgram effect=RenderSystem.shaders().create(new ShaderSources("combiner-effect-fixture",
+                "#version 410 core\nlayout(location=0) in vec3 position;void main(){gl_Position=vec4(position,1.0);}",
+                "#version 410 core\nout vec4 color;void main(){color=vec4(1.0,0.0,1.0,1.0);}"))) {
+            g.selectEffect(effect);clear(g);doubleQuad(g);pixel(32,32,255,0,255,"imported shader retains its own formula with texture combiner active");g.selectEffect(null);
+        }
+        g.glPopAttrib();clear(g);doubleQuad(g);pixel(32,32,100,80,40,"texture attribute scope restores modulation");
+        boolean rejected=false;try{g.glTexEnvi(8960,34161,260);}catch(IllegalArgumentException expected){rejected=true;}
+        check(rejected,"unreviewed texture operation fails closed");
+        g.glDisable(3553);g.glDeleteTextures(texture);g.glColor4f(1,1,1,1);
+    }
+    private static void doubleQuad(GameRenderCommands g) {
+        g.glBegin(7);g.glVertex2d(-.8,-.8);g.glVertex2d(.8,-.8);g.glVertex2d(.8,.8);g.glVertex2d(-.8,.8);g.glEnd();
+    }
     private static void originalChunk(GameRenderCommands g)throws Exception {
         Class<?> type=Class.forName("net.A.U.H");int handle=g.glGenLists(3);
         Object chunk=type.getConstructors()[0].newInstance(null,new java.util.ArrayList<Object>(),0,0,0,handle);
         check(chunk instanceof GameChunkHandle&&((GameChunkHandle)chunk).mcglChunkHandle()==handle,"actual H constructor exposes its typed renderer handle");
         type.getMethod("Ö00000").invoke(chunk);check(g.residentChunks()==0,"actual H clean rebuild guard does not publish an empty chunk");
         type.getField("õ00000").setBoolean(chunk,true);boolean failed=false;
-        try{type.getMethod("Ö00000").invoke(chunk);}catch(InvocationTargetException expected){failed=expected.getCause() instanceof NullPointerException;}
+        try{type.getMethod("Ö00000").invoke(chunk);}catch(InvocationTargetException expected){if(!(expected.getCause() instanceof NullPointerException))throw new AssertionError("Unexpected original chunk fixture failure",expected.getCause());failed=true;}
         check(failed&&g.residentChunks()==0,"actual H failed world build aborts its pending publication");
         check(!Class.forName("net.A.C.voidfloat").getField("floatclass").getBoolean(null),"actual H failure restores shared build flag");
         type.getMethod("Ô00000").invoke(chunk);g.glDeleteLists(handle,3);

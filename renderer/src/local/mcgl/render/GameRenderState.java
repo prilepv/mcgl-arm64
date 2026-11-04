@@ -12,6 +12,9 @@ public final class GameRenderState {
     private final Set<Integer> enabled = new HashSet<Integer>();
     private final boolean[] textured = new boolean[4];
     private final float[][] uv = new float[4][2];
+    private final int[] textureMode = {8448, 8448, 8448, 8448};
+    private final int[] textureSource = {5890, 5890, 5890, 5890};
+    private final float[][] textureConstant = new float[4][4];
     private float[] color = {1, 1, 1, 1}, normal = {0, 0, 1}, fogColor = {0, 0, 0, 0};
     private float[] ambient = {.2f, .2f, .2f, 1}, materialAmbient = {.2f, .2f, .2f, 1};
     private float[] materialDiffuse = {.8f, .8f, .8f, 1};
@@ -41,6 +44,24 @@ public final class GameRenderState {
     }
     public boolean enabled(int capability) { return capability == 3553 ? textured[activeUnit] : enabled.contains(capability); }
     public int activeUnit() { return activeUnit; }
+    /** Reviewed MCGL font combiner: constant RGB times previous RGB, texture alpha times previous alpha. */
+    public void textureEnvironment(int target, int parameter, int value) {
+        if (target != 8960) throw new IllegalArgumentException("Expected texture environment");
+        if (parameter == 8704 && (value == 8448 || (activeUnit == 0 && value == 34160))) textureMode[activeUnit] = value;
+        else if (activeUnit == 0 && parameter == 34176 && (value == 5890 || value == 34166)) textureSource[0] = value;
+        else if (activeUnit == 0 && ((parameter == 34161 || parameter == 34162) && value == 8448
+                || (parameter == 34177 || parameter == 34185) && value == 34168
+                || (parameter == 34192 || parameter == 34193) && value == 768
+                || parameter == 34184 && value == 5890
+                || (parameter == 34200 || parameter == 34201) && value == 770)) { /* unchanged GL defaults */ }
+        else throw new IllegalArgumentException("Unsupported texture combine operation: " + parameter + "=" + value);
+    }
+    public void textureEnvironment(int target, int parameter, float[] value) {
+        if (target != 8960 || parameter != 8705 || value.length != 4) throw new IllegalArgumentException("Expected texture environment color");
+        float[] copy = new float[4]; for (int i = 0; i < 4; i++) copy[i] = clamp(value[i]);
+        textureConstant[activeUnit] = copy;
+    }
+    public boolean constantTextureCombine() { return textureMode[0] == 34160 && textureSource[0] == 34166; }
     public void activeUnit(int unit) {
         if (unit < 0 || unit >= 4) throw new IllegalArgumentException("Game texture unit: " + unit);
         activeUnit = unit; matrices.textureUnit(unit);
@@ -116,6 +137,8 @@ public final class GameRenderState {
         vector(program, "uGameUv", uv[0]); vector(program, "uGameLightmap", uv[1]);
         integer(program, "uTextured", textured[0] ? 1 : 0); integer(program, "uLightmapped", textured[1] ? 1 : 0);
         integer(program, "uTexture", 0); integer(program, "uLightmap", 1);
+        integer(program, "uConstantTextureCombine", constantTextureCombine() ? 1 : 0);
+        vector(program, "uTextureConstant", textureConstant[0]);
         integer(program, "uLighting", enabled(2896) ? 1 : 0); integer(program, "uFlat", shade == 7424 ? 1 : 0);
         integer(program, "uNormalize", enabled(2977) || enabled(32826) ? 1 : 0);
         integer(program, "uColorMaterial", enabled(2903) ? colorMaterialMode : 0);
@@ -173,7 +196,12 @@ public final class GameRenderState {
         if ((mask & 0x2000) != 0) {
             enabled.clear(); enabled.addAll(source.enabled); System.arraycopy(source.textured, 0, textured, 0, textured.length);
         }
-        if ((mask & 0x40000) != 0) { activeUnit(source.activeUnit); System.arraycopy(source.textured, 0, textured, 0, textured.length); }
+        if ((mask & 0x40000) != 0) {
+            activeUnit(source.activeUnit); System.arraycopy(source.textured, 0, textured, 0, textured.length);
+            System.arraycopy(source.textureMode, 0, textureMode, 0, 4);
+            System.arraycopy(source.textureSource, 0, textureSource, 0, 4);
+            for (int i = 0; i < 4; i++) textureConstant[i] = source.textureConstant[i].clone();
+        }
         if ((mask & 0x4000) != 0) {
             alphaFunction = source.alphaFunction; alphaReference = source.alphaReference; copyEnable(source, 3008);
         }

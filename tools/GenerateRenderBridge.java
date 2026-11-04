@@ -60,6 +60,7 @@ public final class GenerateRenderBridge {
             String signature = command.name + command.descriptor;
             switch (signature) {
                 case "glFog(ILjava/nio/FloatBuffer;)V": name = "glFogfv"; break;
+                case "glTexEnv(IILjava/nio/FloatBuffer;)V": name = "glTexEnvfv"; break;
                 case "glGetFloat(ILjava/nio/FloatBuffer;)V": name = "glGetFloatv"; break;
                 case "glGetInteger(ILjava/nio/IntBuffer;)V": name = "glGetIntegerv"; break;
                 case "glLight(IILjava/nio/FloatBuffer;)V": name = "glLightfv"; break;

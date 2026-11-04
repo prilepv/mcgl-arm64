@@ -6,7 +6,7 @@ import Foundation
 struct InstallerCompatibilityTest {
     static func main() throws {
         let args = CommandLine.arguments
-        guard args.count == 5 else { fatalError("TEST.app ORIGINAL_CLIENT_DIR UPDATED_MCGL.jar NEW_OUTPUT_DIR") }
+        guard args.count == 5 || args.count == 6 else { fatalError("TEST.app ORIGINAL_CLIENT_DIR UPDATED_MCGL.jar NEW_OUTPUT_DIR [SIGNED_PACK]") }
         let fm = FileManager.default
         let resources = URL(fileURLWithPath: args[1]).appendingPathComponent("Contents/Resources")
         let original = URL(fileURLWithPath: args[2])
@@ -14,14 +14,26 @@ struct InstallerCompatibilityTest {
         let root = URL(fileURLWithPath: args[4], isDirectory: true)
         precondition(!fm.fileExists(atPath: root.path), "Test output already exists")
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        if args.count == 6 {
+            let cache = root.appendingPathComponent("Compatibility/core-17")
+            try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+            let sha = try MCGLInstaller.sha256File(updated)
+            try fm.copyItem(at: URL(fileURLWithPath: args[5]), to: cache.appendingPathComponent(sha + ".pack"))
+        }
         let installed = root.appendingPathComponent("installed-canary")
         try fm.createDirectory(at: installed, withIntermediateDirectories: true)
         let options = installed.appendingPathComponent("options.txt")
         let canary = Data("alphaSort:false\nlocal-test-canary:keep\n".utf8)
         try canary.write(to: options)
+        let installedJar = installed.appendingPathComponent("bin/mcgl.jar")
+        try fm.createDirectory(at: installedJar.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let jarCanary = Data("installed-client-must-not-change".utf8)
+        try jarCanary.write(to: installedJar)
         func checkCanary() throws {
             let actual = try Data(contentsOf: options)
             precondition(actual == canary)
+            let actualJar = try Data(contentsOf: installedJar)
+            precondition(actualJar == jarCanary)
         }
         let installer = MCGLInstaller(
             supportRootURL: root, gameDirectoryURL: installed,

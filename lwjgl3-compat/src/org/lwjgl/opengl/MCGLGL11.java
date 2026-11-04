@@ -10,6 +10,7 @@ public final class MCGLGL11 extends GL11 {
     static boolean insideBeginEnd() { return local.mcgl.render.RenderSystem.insideBeginEnd(); }
     public static void glNewList(int list, int mode) { local.mcgl.render.legacy.GL11.glNewList(list, mode); }
     public static void glFog(int parameter, FloatBuffer values) { local.mcgl.render.legacy.GL11.glFog(parameter, values); }
+    public static void glTexEnv(int target, int parameter, FloatBuffer values) { local.mcgl.render.legacy.GL11.glTexEnv(target, parameter, values); }
     public static void glGetFloat(int parameter, FloatBuffer values) { local.mcgl.render.legacy.GL11.glGetFloat(parameter, values); }
     public static void glGetInteger(int parameter, IntBuffer values) { local.mcgl.render.legacy.GL11.glGetInteger(parameter, values); }
     public static void glLight(int light, int parameter, FloatBuffer values) { local.mcgl.render.legacy.GL11.glLight(light, parameter, values); }

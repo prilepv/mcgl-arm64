@@ -187,6 +187,7 @@ test_cp="$classes:$asm:$lwjgl"
     "$source_root/native-window-patch/ClassBytePatch.java" \
     "$source_root/awt-patch/src/local/mcgl/CocoaWindowBridge.java" \
     "$source_root/tools/MCGLBytecodeFingerprint.java" \
+    "$source_root/tools/MCGLCompatibilityPack.java" \
     "$source_root/tools/MCGLClientCompatibility.java" \
     "$source_root"/tools/PatchMCGL*.java \
     "$source_root/tools/RenderCommandSpec.java" "$source_root/tools/GenerateRenderBridge.java" \

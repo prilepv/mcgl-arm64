@@ -1,11 +1,11 @@
 #!/bin/bash
 # Stage 10 integration check against a staged post-stage-9 original client, without account/server access.
 set -euo pipefail
-[[ $# -ge 4 && $# -le 6 ]] || { echo 'usage: JAVA21_HOME FOUNDATION.app POST_CHUNK_CLIENT.jar ORIGINAL_SHADER_DIRECTORY [--live] [--original-chunks]' >&2; exit 64; }
+[[ $# -ge 4 && $# -le 6 ]] || { echo 'usage: JAVA21_HOME FOUNDATION.app POST_CHUNK_CLIENT.jar ORIGINAL_SHADER_DIRECTORY [--live|--offscreen] [--original-chunks]' >&2; exit 64; }
 live=0
 original=0
 for option in "${@:5}"; do
-    case "$option" in --live) live=1 ;; --original-chunks) original=1 ;; *) echo "Unknown option: $option" >&2; exit 64 ;; esac
+    case "$option" in --live) live=1 ;; --offscreen) live=2 ;; --original-chunks) original=1 ;; *) echo "Unknown option: $option" >&2; exit 64 ;; esac
 done
 source_root=$(cd "$(dirname "$0")/.." && pwd)
 jdk_root=$1
@@ -20,6 +20,7 @@ ditto "$result_dir/renderer/classes" "$result_dir/classes"
 "$jdk_root/bin/javac" --release 8 -encoding UTF-8 -cp "$result_dir/classes:$library" -d "$result_dir/classes" \
     "$source_root/lwjgl3-compat/src/org/lwjgl/opengl/ContextCapabilities.java" \
     "$source_root/tests/render/GameInputsTest.java" "$source_root/tests/render/ChunkContractsTest.java" \
+    "$source_root/tests/render/OffscreenCoreContext.java" \
     "$source_root/tests/render/GameModelBatchTest.java" "$source_root/tests/render/GameModelBatchProbe.java" \
     "$source_root/tests/render/GameTerrainMaterialsProbe.java" \
     "$source_root/tests/render/GameTextureArraysProbe.java" "$source_root/tests/render/GameTextureArrayBudgetProbe.java" \
@@ -29,6 +30,7 @@ ditto "$result_dir/renderer/classes" "$result_dir/classes"
     "$source_root/tests/render/OriginalChunkEmitter.java" "$source_root/tests/render/GameTextProbe.java" "$source_root/tests/render/GameTerrainBatchProbe.java" "$source_root/tests/render/GameTerrainRecoveryProbe.java" "$source_root/tests/render/GameTerrainFormatTest.java" "$source_root/tests/render/GameRendererProbe.java"
 "$jdk_root/bin/javac" --release 8 -encoding UTF-8 -cp "$asm" -d "$result_dir/tools" \
     "$source_root/tools/MCGLBytecodeFingerprint.java" \
+    "$source_root/tools/MCGLCompatibilityPack.java" \
     "$source_root/tools/RenderCommandSpec.java" "$source_root/tools/PatchMCGLGame.java" "$source_root/tests/render/GameAdapterTest.java" "$source_root/tests/render/OriginalChunkAdapterTest.java" "$source_root/tests/render/FontAdapterTest.java"
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.GameInputsTest "$4"
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.backend.GameChunkTexturesTest
@@ -44,7 +46,7 @@ fi
 "$jdk_root/bin/java" -cp "$result_dir/tools:$asm" FontAdapterTest "$3" "$result_dir/game-client.jar" "$source_root/renderer/legacy-commands.txt" "$result_dir/font-negative"
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library:$result_dir/game-client.jar" \
     local.mcgl.render.ChunkContractsTest "$result_dir/game-client.jar"
-if [[ $live == 1 ]]; then
+if [[ $live != 0 ]]; then
     "$jdk_root/bin/javac" --release 8 -d "$result_dir/bootstrap" "$source_root/tests/render/game-launcher/DirectLauncher.java"
     "$jdk_root/bin/jar" cf "$result_dir/game-renderer.jar" -C "$result_dir/classes" .
     "$jdk_root/bin/jar" cf "$result_dir/bootstrap.jar" -C "$result_dir/bootstrap" .
@@ -61,6 +63,18 @@ if [[ $live == 1 ]]; then
     ditto "$result_dir/game-client.jar" "$profile/bin/mcgl.jar"
     ditto "$result_dir/game-renderer.jar" "$profile/bin/game-renderer.jar"
     ditto "$result_dir/bootstrap.jar" "$profile/mcgl-nativewindow-patch.jar"
+    if [[ $live == 2 ]]; then
+        xcrun clang -dynamiclib -arch arm64 -mmacosx-version-min=14.0 -Wno-deprecated-declarations \
+            -I"$jdk_root/include" -I"$jdk_root/include/darwin" -framework OpenGL \
+            "$source_root/tests/render/OffscreenCoreContext.c" -o "$result_dir/offscreen.dylib"
+        (cd "$profile" && "$jdk_root/bin/java" -Djava.awt.headless=true \
+            -Dmcgl.test.offscreenLibrary="$result_dir/offscreen.dylib" -Dorg.lwjgl.librarypath="$profile/bin/natives" \
+            -cp "$result_dir/classes:$library:$result_dir/game-client.jar" local.mcgl.render.tests.GameRendererProbe --offscreen) \
+            > "$result_dir/game-renderer-gpu.log" 2>&1
+        grep -q '^GAME_RENDERER_GPU_PASS ' "$result_dir/game-renderer-gpu.log"
+        echo 'GAME_RENDERER_CHECK_PASS context=CGL-offscreen (window/fullscreen not exercised)'
+        exit 0
+    fi
     "$result_dir/runtime-harness" "$resources/MCGL ARM64 Runtime.app/Contents/MacOS/MCGL ARM64 Runtime" \
         "$profile" "$result_dir/game-renderer-gpu.log"
     grep -q '^GAME_RENDERER_GPU_PASS ' "$result_dir/game-renderer-gpu.log"

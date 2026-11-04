@@ -1446,6 +1446,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 self.appendLog("Официальные файлы проверены; ARM64-патчи готовы.")
                 self.launchPreparedGame(login: login, password: password)
             case .failure(let error):
+                if (error as NSError).userInfo["MCGLCompatibilityUnavailable"] as? Bool == true,
+                   installer.canLaunchSavedClient() {
+                    self.appendLog("Обновление не установлено: \(error.localizedDescription)")
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = "Обновление MCGL пока недоступно"
+                    alert.informativeText = "\(error.localizedDescription)\n\nСохранённый клиент прошёл проверку файлов. Можно попробовать запустить его. Сервер может потребовать новую версию клиента."
+                    alert.addButton(withTitle: "Запустить сохранённый клиент")
+                    alert.addButton(withTitle: "Отмена")
+                    if alert.runModal() == .alertFirstButtonReturn {
+                        self.appendLog("По выбору пользователя запускается сохранённый клиент без установки обновления.")
+                        self.launchPreparedGame(login: login, password: password)
+                    } else {
+                        self.resetLaunchControls(status: "Обновление не установлено")
+                    }
+                    return
+                }
                 self.resetLaunchControls(status: "Ошибка обновления")
                 self.showError("Не удалось подготовить официальный клиент: \(error.localizedDescription)")
             }

@@ -29,6 +29,11 @@ public final class MCGLBytecodeFingerprint {
     public static long of(MethodNode method) {
         byte[] bytes = bytes(method);
         CRC32 crc = new CRC32(); crc.update(bytes); long actual = crc.getValue();
+        MCGLCompatibilityPack pack = MCGLCompatibilityPack.active();
+        if (pack != null) {
+            Long reviewed = pack.aliases.get(sha256(bytes));
+            if (reviewed != null) return reviewed;
+        }
         // Same instructions and decoded text; only upstream XOR string keys changed.
         // November input: independently decoded and compared with the same guards.
         if (actual == 2881773571L && sha256(bytes).equals("dd0755c6c46a407a579359721d6c2f1d3443fe91663ab7d1ca8d39f9d35666c7")) return 1608031326L;
@@ -62,7 +67,8 @@ public final class MCGLBytecodeFingerprint {
     }
 
     public static boolean updatedQuadSort(MethodNode method) {
-        return sha256(bytes(method)).equals("cbfab4ec34f42b266f0ddb40c90d5ad04225e02e01eb5a0aca8ed7bb7e37a406");
+        String sha = sha256(bytes(method)); MCGLCompatibilityPack pack = MCGLCompatibilityPack.active();
+        return sha.equals("cbfab4ec34f42b266f0ddb40c90d5ad04225e02e01eb5a0aca8ed7bb7e37a406") || pack != null && pack.sorters.contains(sha);
     }
 
     private MCGLBytecodeFingerprint() {}

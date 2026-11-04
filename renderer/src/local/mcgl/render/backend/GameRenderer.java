@@ -415,6 +415,8 @@ public class GameRenderer {
     public void glVertex3f(float x,float y,float z){if(immediate==null)throw new IllegalStateException("Vertex outside game primitive");immediate.vertex(x,y,z);}
     public void glVertex3d(double x,double y,double z){glVertex3f((float)x,(float)y,(float)z);}
     public void glVertex2f(float x,float y){glVertex3f(x,y,0);}
+    public void glVertex2d(double x,double y){glVertex3f((float)x,(float)y,0);}
+    public void glColor4d(double r,double g,double b,double a){glColor4f((float)r,(float)g,(float)b,(float)a);}
     public void glColor4f(float r,float g,float b,float a) {
         if(immediate!=null){immediate.color=new float[]{clamp(r),clamp(g),clamp(b),clamp(a)};immediate.mask|=2;immediate.changed|=2;return;}
         if(recordInput(()->glColor4f(r,g,b,a)))return;flushTerrain();state.color(r,g,b,a);
@@ -430,6 +432,7 @@ public class GameRenderer {
     }
     public void glNormal3d(double x,double y,double z){glNormal3f((float)x,(float)y,(float)z);}
     public void glTexCoord2f(float u,float v){glMultiTexCoord2f(33984,u,v);}
+    public void glTexCoord2d(double u,double v){glTexCoord2f((float)u,(float)v);}
     public void glMultiTexCoord2f(int unit,float u,float v) {
         int index=unit-33984;if(index<0||index>=4)throw new IllegalArgumentException("Game texture coordinate unit");
         if(immediate!=null){if(index>1)throw new IllegalArgumentException("Immediate auxiliary texture coordinates");if(index==0){immediate.uv=new float[]{u,v};immediate.mask|=4;immediate.changed|=4;}else{immediate.light=new float[]{u,v};immediate.mask|=8;immediate.changed|=8;}return;}
@@ -505,7 +508,9 @@ public class GameRenderer {
     public void glDeleteTextures(int texture){outsideBegin();flushExternal();originalRenderTargets.remove(texture);if(terrainBatch!=null)terrainBatch.textureDeleted(texture);raster.deleteTexture(texture);}
     public void glDeleteTextures(IntBuffer textures){outsideBegin();flushExternal();for(int i=textures.position();i<textures.limit();i++){originalRenderTargets.remove(textures.get(i));if(terrainBatch!=null)terrainBatch.textureDeleted(textures.get(i));raster.deleteTexture(textures.get(i));}}
     public void glTexParameteri(int target,int parameter,int value){if(record(()->glTexParameteri(target,parameter,value)))return;raster.textureParameter(target,parameter,value);}
-    public void glTexEnvi(int target,int parameter,int value){if(record(()->glTexEnvi(target,parameter,value)))return;if(target!=8960||parameter!=8704||value!=8448)throw new IllegalArgumentException("Unsupported texture combine operation");}
+    public void glTexEnvi(int target,int parameter,int value){if(record(()->glTexEnvi(target,parameter,value)))return;flushText();state.textureEnvironment(target,parameter,value);}
+    public void glTexEnv(int target,int parameter,FloatBuffer value){textureEnvironment(target,parameter,GameRenderState.read(value,4));}
+    private void textureEnvironment(int target,int parameter,float[] value){if(record(()->textureEnvironment(target,parameter,value)))return;flushText();state.textureEnvironment(target,parameter,value);}
     public void glTexImage2D(int target,int level,int internal,int width,int height,int border,int format,int type,ByteBuffer pixels) {
         if(compiling!=null){final ByteBuffer copy=copy(pixels);if(record(()->glTexImage2D(target,level,internal,width,height,border,format,type,copy)))return;}
         outsideBegin();flushExternal();GL11C.glTexImage2D(target,level,internal==3?GL11C.GL_RGB8:internal==4?GL11C.GL_RGBA8:internal,width,height,border,format,type,pixels);
