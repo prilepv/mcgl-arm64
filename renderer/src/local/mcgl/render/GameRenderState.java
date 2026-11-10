@@ -8,6 +8,7 @@ import java.util.Set;
 
 /** Explicit material inputs for the migrated game. Native raster/texture state is separate. */
 public final class GameRenderState {
+    public static final int METAL_MATERIAL_FLOATS = 112;
     public final GameMatrices matrices = new GameMatrices();
     private final Set<Integer> enabled = new HashSet<Integer>();
     private final boolean[] textured = new boolean[4];
@@ -23,6 +24,12 @@ public final class GameRenderState {
     private int colorMaterialFace = 1032, colorMaterialMode = 5634;
     private float alphaReference, fogStart, fogEnd = 1, fogDensity = 1;
     private final FloatBuffer matrixBuffer = ByteBuffer.allocateDirect(64).order(ByteOrder.nativeOrder()).asFloatBuffer();
+    private final double[] modelInput = new double[16], matrixInput = new double[16];
+    private final float[] normalInput = new float[9];
+    private static final String[][] LIGHT_UNIFORMS = {
+        {"uGameLight0.position", "uGameLight0.ambient", "uGameLight0.diffuse", "uGameLight0.specular", "uGameLight0.halfVector", "uLightEnabled0"},
+        {"uGameLight1.position", "uGameLight1.ambient", "uGameLight1.diffuse", "uGameLight1.specular", "uGameLight1.halfVector", "uLightEnabled1"}
+    };
 
     private static final class Light {
         float[] position = {0, 0, 1, 0}, diffuse, ambient = {0, 0, 0, 1}, specular;
@@ -86,6 +93,36 @@ public final class GameRenderState {
         if (mode != 7424 && mode != 7425) throw new IllegalArgumentException("Shade mode: " + mode); shade = mode;
     }
     public int shade() { return shade; }
+    /** Material inputs for the optional native terrain diagnostic, in shader order. */
+    public void writeTerrainPreview(FloatBuffer floats, int[] flags) {
+        floats.clear();
+        matrices.copyProjection(matrixInput);
+        for (double value : matrixInput) floats.put((float)value);
+        for (int unit = 0; unit < 2; unit++) {
+            matrices.copyTexture(unit, matrixInput);
+            for (double value : matrixInput) floats.put((float)value);
+        }
+        floats.put(color).put(fogColor).put(fogStart).put(fogEnd).put(fogDensity).put(alphaReference);
+        floats.put(uv[0]).put(uv[1]).flip();
+        flags[0] = (textured[0] ? 1 : 0) | (textured[1] ? 2 : 0) | (shade == 7424 ? 4 : 0);
+        flags[1] = enabled(3008) ? alphaFunction - 511 : 0;
+        flags[2] = !enabled(2912) ? 0 : fogMode == 9729 ? 1 : fogMode == 2048 ? 2 : 3;
+        flags[3] = fogDistance;
+    }
+
+    public void writeMetalMaterial(FloatBuffer floats, int[] flags) {
+        writeTerrainPreview(floats, flags);
+        floats.limit(METAL_MATERIAL_FLOATS);
+        floats.position(64);
+        int mode = enabled(2903) ? colorMaterialMode : 0;
+        floats.put(enabled(2896) ? 1 : 0).put(enabled(2977) || enabled(32826) ? 1 : 0)
+                .put(mode == 4608 || mode == 5634 ? 1 : 0).put(mode == 4609 || mode == 5634 ? 1 : 0);
+        floats.put(normal).put((enabled(16384) ? 1 : 0) | (enabled(16385) ? 2 : 0));
+        floats.put(ambient).put(materialAmbient).put(materialDiffuse);
+        for (Light light : lights) floats.put(light.position).put(light.ambient).put(light.diffuse);
+        floats.put(textureConstant[0]).flip();
+        if (constantTextureCombine()) flags[0] |= 8;
+    }
     public void fog(int parameter, float value) {
         finite(value);
         if (parameter == 2915) fogStart = value;
@@ -101,7 +138,7 @@ public final class GameRenderState {
     public void light(int index, int parameter, float[] value) {
         if (index < 0 || index >= lights.length || value.length != 4) throw new IllegalArgumentException("Game light");
         finite(value); Light light = lights[index];
-        if (parameter == 4611) light.position = GameMatrices.transform(matrices.modelView(), value);
+        if (parameter == 4611) { matrices.copyModelView(matrixInput); GameMatrices.transform(matrixInput,value,light.position); }
         else if (parameter == 4608) light.ambient = value.clone();
         else if (parameter == 4609) light.diffuse = value.clone();
         else if (parameter == 4610) light.specular = value.clone();
@@ -121,8 +158,12 @@ public final class GameRenderState {
     }
     public static float[] read(FloatBuffer buffer, int count) {
         if (buffer == null || buffer.remaining() < count) throw new IllegalArgumentException("Insufficient game parameter buffer");
-        float[] result = new float[count]; for (int i = 0; i < count; i++) result[i] = buffer.get(buffer.position() + i);
-        return finite(result);
+        float[] result = new float[count]; read(buffer,result); return result;
+    }
+    public static void read(FloatBuffer buffer,float[] result) {
+        if (result == null || buffer == null || buffer.remaining() < result.length) throw new IllegalArgumentException("Insufficient game parameter buffer");
+        for (int i = 0; i < result.length; i++) result[i] = buffer.get(buffer.position() + i);
+        finite(result);
     }
     public void bind(ShaderProgram program, int attributeMask) {
         bind(program,attributeMask,null);
@@ -130,9 +171,14 @@ public final class GameRenderState {
     /** Optional original draw matrix without mutating the logical matrix stack. */
     public void bind(ShaderProgram program,int attributeMask,double[] originalModel) {
         if(originalModel!=null&&originalModel.length!=16)throw new IllegalArgumentException("Original model matrix");
-        double[] model = originalModel==null?matrices.modelView():originalModel; matrix4(program, "uModelView", model); matrix4(program, "uProjection", matrices.projection());
-        matrix3(program, "uNormalMatrix", GameMatrices.normal(model));
-        matrix4(program, "uTextureMatrix", matrices.texture(0)); matrix4(program, "uLightmapMatrix", matrices.texture(1));
+        if(originalModel!=null)GameMatrices.validate(originalModel);
+        if(originalModel==null)matrices.copyModelView(modelInput);
+        double[] model = originalModel==null?modelInput:originalModel; matrix4(program, "uModelView", model);
+        matrices.copyProjection(matrixInput); matrix4(program, "uProjection", matrixInput);
+        ShaderUniform normalUniform = program.findUniform("uNormalMatrix");
+        if(normalUniform!=null){GameMatrices.normal(model,normalInput);matrixBuffer.clear();matrixBuffer.put(normalInput).flip();normalUniform.setMatrix3(matrixBuffer);}
+        matrices.copyTexture(0,matrixInput); matrix4(program, "uTextureMatrix", matrixInput);
+        matrices.copyTexture(1,matrixInput); matrix4(program, "uLightmapMatrix", matrixInput);
         integer(program, "uGameAttributeMask", attributeMask); vector(program, "uGameColor", color); vector(program, "uGameNormal", normal);
         vector(program, "uGameUv", uv[0]); vector(program, "uGameLightmap", uv[1]);
         integer(program, "uTextured", textured[0] ? 1 : 0); integer(program, "uLightmapped", textured[1] ? 1 : 0);
@@ -150,15 +196,18 @@ public final class GameRenderState {
         vector(program, "uGameLightModel.ambient", ambient); vector(program, "uGameMaterial.ambient", materialAmbient);
         vector(program, "uGameMaterial.diffuse", materialDiffuse);
         for (int i = 0; i < lights.length; i++) {
-            Light light = lights[i]; String prefix = "uGameLight" + i + ".";
-            integer(program, "uLightEnabled" + i, enabled(16384 + i) ? 1 : 0);
-            vector(program, prefix + "position", light.position); vector(program, prefix + "ambient", light.ambient);
-            vector(program, prefix + "diffuse", light.diffuse); vector(program, prefix + "specular", light.specular);
-            double n = Math.sqrt(light.position[0]*light.position[0] + light.position[1]*light.position[1] + light.position[2]*light.position[2]);
-            float x = n == 0 ? 0 : (float)(light.position[0]/n), y = n == 0 ? 0 : (float)(light.position[1]/n);
-            float z = n == 0 ? 1 : (float)(light.position[2]/n) + 1;
-            double hn = Math.sqrt(x*x+y*y+z*z);
-            vector(program, prefix + "halfVector", hn == 0 ? new float[4] : new float[] {(float)(x/hn), (float)(y/hn), (float)(z/hn), 0});
+            Light light = lights[i]; String[] names = LIGHT_UNIFORMS[i];
+            integer(program, names[5], enabled(16384 + i) ? 1 : 0);
+            vector(program, names[0], light.position); vector(program, names[1], light.ambient);
+            vector(program, names[2], light.diffuse); vector(program, names[3], light.specular);
+            ShaderUniform half = program.findUniform(names[4]);
+            if(half!=null){
+                double n = Math.sqrt(light.position[0]*light.position[0] + light.position[1]*light.position[1] + light.position[2]*light.position[2]);
+                float x = n == 0 ? 0 : (float)(light.position[0]/n), y = n == 0 ? 0 : (float)(light.position[1]/n);
+                float z = n == 0 ? 1 : (float)(light.position[2]/n) + 1;
+                double hn = Math.sqrt(x*x+y*y+z*z);
+                if(hn==0)half.setVec4(0,0,0,0);else half.setVec4((float)(x/hn),(float)(y/hn),(float)(z/hn),0);
+            }
         }
     }
     private void matrix4(ShaderProgram program, String name, double[] value) {

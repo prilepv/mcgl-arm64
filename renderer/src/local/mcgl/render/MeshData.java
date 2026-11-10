@@ -9,12 +9,22 @@ public final class MeshData {
     private final IndexData indices;
     private final int vertexCount;
     public MeshData(VertexLayout layout, ByteBuffer vertices, IndexData indices) {
+        this(layout, vertices, indices, false);
+    }
+    /** The caller transfers a freshly allocated buffer with no remaining writable aliases. */
+    static MeshData takeOwnedVertices(VertexLayout layout, ByteBuffer vertices, IndexData indices) {
+        return new MeshData(layout, vertices, indices, true);
+    }
+    private MeshData(VertexLayout layout, ByteBuffer vertices, IndexData indices, boolean owned) {
         this.vertexCount = validateVertices(layout, vertices);
         if (indices == null) throw new NullPointerException("mesh indices");
         if (indices.maximum() >= vertexCount) throw new IllegalArgumentException("Index exceeds vertex count");
-        ByteBuffer copy = ByteBuffer.allocateDirect(vertices.remaining()).order(ByteOrder.nativeOrder());
-        copy.put(vertices.duplicate()); copy.flip();
-        this.vertices = copy.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+        if (!owned) {
+            ByteBuffer copy = ByteBuffer.allocateDirect(vertices.remaining()).order(ByteOrder.nativeOrder());
+            copy.put(vertices.duplicate()); copy.flip();
+            vertices = copy;
+        }
+        this.vertices = vertices.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
         this.layout = layout; this.indices = indices;
     }
     public static int validateVertices(VertexLayout layout, ByteBuffer data) {

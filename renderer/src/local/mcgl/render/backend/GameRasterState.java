@@ -87,6 +87,7 @@ final class GameRasterState {
     void depthMask(boolean value){set("depthMask",0x100,()->nativeDepthMask(value));}
     private void nativeDepthMask(boolean value){depthWrite=value;GL11C.glDepthMask(value);}
     int texture(){return textures[activeTexture];}
+    int previewTexture(int unit){return textures[unit];}
     private void applyViewport(int x,int y,int width,int height){viewportWidth=width;viewportHeight=height;GL11C.glViewport(x,y,width,height);}
     void viewport(int x,int y,int width,int height){set("viewport",0x800,()->applyViewport(x,y,width,height));}
     int viewportWidth(){return viewportWidth;}int viewportHeight(){return viewportHeight;}
@@ -108,12 +109,16 @@ final class GameRasterState {
     int originalActiveTexture(){return activeTexture;}
     private void texture(int unit,int texture){textures[unit]=texture;GL13C.glActiveTexture(GL13C.GL_TEXTURE0+unit);GL11C.glBindTexture(GL11C.GL_TEXTURE_2D,texture);rememberTexture(texture);}
     void bindTexture(int target,int texture){if(target!=GL11C.GL_TEXTURE_2D)throw new IllegalArgumentException("Game texture target");final int unit=activeTexture;set("texture/"+unit,0x40000,()->texture(unit,texture));}
-    void textureParameter(int target,int parameter,int value) {
+    boolean textureParameter(int target,int parameter,int value) {
         if(target!=GL11C.GL_TEXTURE_2D||textures[activeTexture]==0)throw new IllegalArgumentException("Texture parameter requires an owned 2D texture");
         int index=-1;for(int i=0;i<TEXTURE_PARAMETERS.length;i++)if(TEXTURE_PARAMETERS[i]==parameter)index=i;
         if(index<0)throw new IllegalArgumentException("Unsupported game texture parameter: "+parameter);
         if(value==10496)value=33071;
-        GL11C.glTexParameteri(target,parameter,value);textureParameters.get(textures[activeTexture])[index]=value;
+        GL11C.glTexParameteri(target,parameter,value);
+        int[] parameters=textureParameters.get(textures[activeTexture]);
+        boolean changed=parameters[index]!=value;
+        parameters[index]=value;
+        return changed;
     }
     void beginSamplers() {
         if(substituted!=0)throw new IllegalStateException("Nested game sampler scope");

@@ -54,12 +54,22 @@ public final class GameInputsTest {
         s.enable(2896,true);s.enable(16384,true);s.enable(2903,true);s.colorMaterial(1032,5634);s.color(.1f,.2f,.3f,.4f);
         s.matrices.loadIdentity();s.matrices.rotate(90,0,0,1);s.light(0,4611,new float[]{1,0,0,0});s.matrices.loadIdentity();s.bind(p.program,31);
         equal((float[])p.values.get("uGameLight0.position"),new float[]{0,1,0,0},"light position transformed at setter time");
+        GameRenderState.Snapshot savedLight=s.snapshot(0x40);float[] moved={2,3,4,1};
+        s.light(0,4611,moved);moved[0]=99;s.bind(p.program,31);
+        equal((float[])p.values.get("uGameLight0.position"),new float[]{2,3,4,1},"light setter owns its input");
+        savedLight.restore(s);s.bind(p.program,31);
+        equal((float[])p.values.get("uGameLight0.position"),new float[]{0,1,0,0},"light snapshot survives reused position storage");
+        FloatBuffer lightBuffer=FloatBuffer.wrap(new float[]{99,1,2,3,4,99});lightBuffer.position(1);lightBuffer.limit(5);float[] lightValue=new float[4];
+        GameRenderState.read(lightBuffer,lightValue);equal(lightValue,new float[]{1,2,3,4},"reused light input reads relative buffer");check(lightBuffer.position()==1&&lightBuffer.limit()==5,"reused light input preserves buffer cursor");
         equal((float[])p.values.get("uGameMaterial.diffuse"),s.color(),"tracked diffuse material");
         GameRenderState.Snapshot enables=s.snapshot(0x2000);s.enable(2896,false);s.enable(3008,false);enables.restore(s);check(s.enabled(2896)&&s.enabled(3008),"enable group restores inputs");
         s.bind(p.program,1);near(p.number("uAlphaFunction"),5,"alpha greater maps explicitly");
         s.activeUnit(1);s.enable(3553,true);s.uv(1,240,224);s.activeUnit(0);s.bind(p.program,1);near(p.number("uLightmapped"),1,"independent lightmap enable");
         fails(()->s.activeUnit(4),"unsupported texture unit");fails(()->s.light(2,4611,new float[4]),"unknown light");
         fails(()->s.alpha(200,0),"unknown alpha function");fails(()->s.fog(1,1),"unknown fog parameter");
+        ShaderProgram noInputs=(ShaderProgram)Proxy.newProxyInstance(GameInputsTest.class.getClassLoader(),new Class[]{ShaderProgram.class},(o,m,a)->null);
+        double[] invalid=GameMatrices.identity();invalid[3]=Double.NaN;
+        fails(()->s.bind(noInputs,1,invalid),"nonfinite original model rejected even when shader has no matrix uniforms");
     }
     private static void geometry() {
         for (int mode=0;mode<=9;mode++) {

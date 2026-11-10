@@ -21,7 +21,7 @@ ditto "$result_dir/renderer/classes" "$result_dir/classes"
     "$source_root/lwjgl3-compat/src/org/lwjgl/opengl/ContextCapabilities.java" \
     "$source_root/tests/render/GameInputsTest.java" "$source_root/tests/render/ChunkContractsTest.java" \
     "$source_root/tests/render/OffscreenCoreContext.java" \
-    "$source_root/tests/render/GameModelBatchTest.java" "$source_root/tests/render/GameModelBatchProbe.java" \
+    "$source_root/tests/render/GameModelBatchTest.java" "$source_root/tests/render/GameModelBatchProbe.java" "$source_root/tests/render/GameModelIndexTest.java" \
     "$source_root/tests/render/GameTerrainMaterialsProbe.java" \
     "$source_root/tests/render/GameTextureArraysProbe.java" "$source_root/tests/render/GameTextureArrayBudgetProbe.java" \
     "$source_root/tests/render/GameChunkTexturesTest.java" \
@@ -36,6 +36,7 @@ ditto "$result_dir/renderer/classes" "$result_dir/classes"
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.backend.GameChunkTexturesTest
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.backend.GameTerrainFormatTest
 "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.backend.GameModelBatchTest
+"$jdk_root/bin/java" -Djava.awt.headless=true -cp "$result_dir/classes:$library" local.mcgl.render.backend.GameModelIndexTest
 if [[ $original == 1 ]]; then
     "$jdk_root/bin/java" -cp "$result_dir/tools:$asm" PatchMCGLGame "$3" "$result_dir/game-client.jar" "$source_root/renderer/legacy-commands.txt" --original-chunks
     "$jdk_root/bin/java" -cp "$result_dir/tools:$asm" OriginalChunkAdapterTest "$3" "$result_dir/game-client.jar" "$source_root/renderer/legacy-commands.txt" "$result_dir/negative"

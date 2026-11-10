@@ -10,38 +10,40 @@ import local.mcgl.render.*;
 public final class OriginalChunkEmitter {
     private final Object value;
     private final Class<?> type;
+    private final boolean updated;
     public final ChunkTessellator adapter;
     public OriginalChunkEmitter(File jarPath, int capacityWords) throws Exception {
         String name = null;
         try (JarFile jar = new JarFile(jarPath)) {
             for (Enumeration<JarEntry> entries = jar.entries(); entries.hasMoreElements();) {
                 String entry = entries.nextElement().getName();
-                if (entry.matches("net/A/for/oOOOoO+\\.class")) {
+                if (entry.equals("net/A/for/superObject.class") || entry.matches("net/A/for/oOOOoO+\\.class")) {
                     if (name != null) throw new AssertionError("ambiguous accumulator");
                     name = entry.substring(0, entry.length() - 6).replace('/', '.');
                 }
             }
         }
         if (name == null) throw new AssertionError("missing accumulator");
-        type = Class.forName(name);
+        updated = name.equals("net.A.for.superObject");
+        type = Class.forName(name, true, Thread.currentThread().getContextClassLoader());
         Constructor<?> constructor = type.getDeclaredConstructor(int.class); constructor.setAccessible(true);
         value = constructor.newInstance(capacityWords); adapter = (ChunkTessellator)value;
     }
     public void bind(ChunkMeshBuilder builder, ChunkMaterial material) {
         adapter.mcglBindChunkBatch(builder.sink(material, -1, 0, 0, 0x007f0000, 0));
     }
-    public void begin() { call("return", new Class<?>[0]); }
-    public void beginMode(int mode) { call("Ó00000", new Class<?>[] {int.class}, mode); }
-    public int draw() { return (Integer)call("new", new Class<?>[0]); }
+    public void begin() { call(updated ? "Ö00000" : "return", new Class<?>[0]); }
+    public void beginMode(int mode) { call(updated ? "Object" : "Ó00000", new Class<?>[] {int.class}, mode); }
+    public int draw() { return (Integer)call(updated ? "Ò00000" : "new", new Class<?>[0]); }
     public void unbind() { adapter.mcglBindChunkBatch(null); }
     public void color(int r, int g, int b, int a) { call("o00000", new Class<?>[] {int.class, int.class, int.class, int.class}, r, g, b, a); }
     public void uv(double u, double v) { call("o00000", new Class<?>[] {double.class, double.class}, u, v); }
     public void lightmap(int value) { call("o00000", new Class<?>[] {int.class}, value); }
     public void normal(float x, float y, float z) { call("Ô00000", new Class<?>[] {float.class, float.class, float.class}, x, y, z); }
     public void translate(double x, double y, double z) { call("o00000", new Class<?>[] {double.class, double.class, double.class}, x, y, z); }
-    public void vertex(double x, double y, double z) { call("new", new Class<?>[] {double.class, double.class, double.class}, x, y, z); }
-    public void cube(float x, float y, float z) { call("new", new Class<?>[] {float.class, float.class, float.class}, x, y, z); }
-    public void sort(double x,double y,double z){call("Ó00000",new Class<?>[]{double.class,double.class,double.class},x,y,z);}
+    public void vertex(double x, double y, double z) { call(updated ? "Ò00000" : "new", new Class<?>[] {double.class, double.class, double.class}, x, y, z); }
+    public void cube(float x, float y, float z) { call(updated ? "Ò00000" : "new", new Class<?>[] {float.class, float.class, float.class}, x, y, z); }
+    public void sort(double x,double y,double z){call(updated ? "Object" : "Ó00000",new Class<?>[]{double.class,double.class,double.class},x,y,z);}
     public int[] snapshot(){return (int[])call("Õ00000",new Class<?>[0]);}
     public void restore(int[] data){call("o00000",new Class<?>[]{int[].class},(Object)data);}
     public void quad(double x0, double y0, double x1, double y1, double z) {

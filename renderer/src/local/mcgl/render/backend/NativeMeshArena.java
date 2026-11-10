@@ -19,6 +19,8 @@ final class NativeMeshArena implements MeshArena {
     private final Consumer<NativeMeshArena> retired;
     private final List<Page> pages=new ArrayList<Page>();
     private final Set<Member> members=Collections.newSetFromMap(new IdentityHashMap<Member,Boolean>());
+    private final boolean asyncUploads=Boolean.parseBoolean(System.getProperty("mcgl.terrain.asyncUploads","true"));
+    private final List<RetiredRange> pending=new ArrayList<RetiredRange>();
     private final IntBuffer counts=BufferUtils.createIntBuffer(MAX_DRAWS),bases=BufferUtils.createIntBuffer(MAX_DRAWS);
     private final PointerBuffer offsets=BufferUtils.createPointerBuffer(MAX_DRAWS);
     private long bytes,creations;
@@ -53,6 +55,7 @@ final class NativeMeshArena implements MeshArena {
     }
     private Allocation reserve(VertexLayout source,int vertices,int indices){
         if(vertices==0||indices==0||vertices>vertexCapacity||indices>indexCapacity)return null;
+        reclaim();
         Page selected=null;int vertex=-1,index=-1;
         for(Page page:pages)if(page.source.equals(source)){
             vertex=page.vertices.allocate(vertices);if(vertex<0)continue;
@@ -87,25 +90,55 @@ final class NativeMeshArena implements MeshArena {
         Page page=range.page;page.vertices.release(range.vertex,range.vertices);page.indices.release(range.index,range.indices);
         if(page.members==0)retire(page);
     }
+    private final class RetiredRange {
+        final Page page;final int vertex,vertices,index,indices;final long fence;
+        RetiredRange(Member member,long fence){page=member.page;vertex=member.firstVertex;vertices=member.vertices;index=member.firstIndex;indices=member.indices;this.fence=fence;}
+    }
+    /** Poll only. A busy range remains reserved and normal arena-budget fallback stays available. */
+    private void reclaim(){
+        for(Iterator<RetiredRange> it=pending.iterator();it.hasNext();){
+            RetiredRange range=it.next();int status=GL32C.glClientWaitSync(range.fence,GL32C.GL_SYNC_FLUSH_COMMANDS_BIT,0);
+            if(status==GL32C.GL_TIMEOUT_EXPIRED)break;
+            if(status!=GL32C.GL_ALREADY_SIGNALED&&status!=GL32C.GL_CONDITION_SATISFIED)throw new IllegalStateException("Cannot check retired terrain range");
+            range.page.vertices.release(range.vertex,range.vertices);range.page.indices.release(range.index,range.indices);
+            GL32C.glDeleteSync(range.fence);it.remove();
+        }
+    }
+    private void release(Member member){
+        if(asyncUploads&&member.submitted){
+            long fence=GL32C.glFenceSync(GL32C.GL_SYNC_GPU_COMMANDS_COMPLETE,0);
+            if(fence==0)throw new IllegalStateException("Cannot protect retired terrain range");
+            pending.add(new RetiredRange(member,fence));
+        }else{member.page.vertices.release(member.firstVertex,member.vertices);member.page.indices.release(member.firstIndex,member.indices);}
+    }
     private Mesh upload(String name,Allocation range,ByteBuffer input,IndexData.Type type,ByteBuffer sourceIndices){
         final Page page=range.page;int vertices=range.vertices,indices=range.indices;boolean published=false;
         try{
             int tag=serial++&(tags.count-1),stride=page.layout.stride(),sourceStride=page.source.stride();
             ByteBuffer upload=BufferUtils.createByteBuffer(Math.multiplyExact(vertices,stride));
-            for(int v=0;v<vertices;v++){
+            if(page.compact){upload.put(input.duplicate());for(int v=0;v<vertices;v++)upload.put(v*stride+tags.packedOffset,(byte)tag);}
+            else for(int v=0;v<vertices;v++){
                 int at=input.position()+v*sourceStride;for(int b=0;b<sourceStride;b++)upload.put(input.get(at+b));
-                if(page.compact)upload.put(v*stride+tags.packedOffset,(byte)tag);
-                else{while(upload.position()%stride<stride-4&&upload.position()%stride!=0)upload.put((byte)0);upload.putFloat(tag);}
+                while(upload.position()%stride<stride-4&&upload.position()%stride!=0)upload.put((byte)0);upload.putFloat(tag);
             }
             upload.flip();ByteBuffer indexUpload=BufferUtils.createByteBuffer(Math.multiplyExact(indices,4));
             for(int i=0;i<indices;i++)indexUpload.putInt(type==IndexData.Type.UINT16?sourceIndices.getShort()&65535:sourceIndices.getInt());indexUpload.flip();
             int previous=GL11C.glGetInteger(GL31C.GL_COPY_WRITE_BUFFER);
             try{
-                GL15C.glBindBuffer(GL31C.GL_COPY_WRITE_BUFFER,page.vbo);GL15C.glBufferSubData(GL31C.GL_COPY_WRITE_BUFFER,(long)range.vertex*stride,upload);
-                GL15C.glBindBuffer(GL31C.GL_COPY_WRITE_BUFFER,page.ibo);GL15C.glBufferSubData(GL31C.GL_COPY_WRITE_BUFFER,(long)range.index*4,indexUpload);
+                GL15C.glBindBuffer(GL31C.GL_COPY_WRITE_BUFFER,page.vbo);write((long)range.vertex*stride,upload);
+                GL15C.glBindBuffer(GL31C.GL_COPY_WRITE_BUFFER,page.ibo);write((long)range.index*4,indexUpload);
             }finally{GL15C.glBindBuffer(GL31C.GL_COPY_WRITE_BUFFER,previous);}
             Member member=new Member(name,page,range.vertex,vertices,range.index,indices,tag);members.add(member);page.members++;published=true;return member;
         }finally{if(!published)discard(range);}
+    }
+    private void write(long offset,ByteBuffer data){
+        if(!asyncUploads){GL15C.glBufferSubData(GL31C.GL_COPY_WRITE_BUFFER,offset,data);return;}
+        // Only fresh or fence-completed ranges reach here. Never map a region still read by queued draws.
+        ByteBuffer mapped=GL30C.glMapBufferRange(GL31C.GL_COPY_WRITE_BUFFER,offset,data.remaining(),
+                GL30C.GL_MAP_WRITE_BIT|GL30C.GL_MAP_INVALIDATE_RANGE_BIT|GL30C.GL_MAP_UNSYNCHRONIZED_BIT);
+        if(mapped==null)throw new IllegalStateException("Cannot map new terrain range");
+        try{mapped.put(data.duplicate());}
+        finally{if(!GL15C.glUnmapBuffer(GL31C.GL_COPY_WRITE_BUFFER))throw new IllegalStateException("Terrain range mapping lost its contents");}
     }
     private Member member(Mesh mesh){if(!(mesh instanceof NativeMeshArena.Member)||!members.contains(mesh)||mesh.isClosed())throw new IllegalArgumentException("Foreign or retired arena member");return (Member)mesh;}
     public boolean contains(Mesh mesh){check();return members.contains(mesh)&&!mesh.isClosed();}
@@ -114,7 +147,7 @@ final class NativeMeshArena implements MeshArena {
     public void draw(Mesh.Primitive primitive,List<Mesh> inputs){
         check();if(inputs.isEmpty())return;if(inputs.size()>MAX_DRAWS)throw new IllegalArgumentException("Oversized arena run");
         Page page=member(inputs.get(0)).page;counts.clear();bases.clear();offsets.clear();
-        for(Mesh mesh:inputs){Member value=member(mesh);if(value.page!=page)throw new IllegalArgumentException("Arena run crosses pages");counts.put(value.indices);bases.put(value.firstVertex);offsets.put((long)value.firstIndex*4);}
+        for(Mesh mesh:inputs){Member value=member(mesh);if(value.page!=page)throw new IllegalArgumentException("Arena run crosses pages");counts.put(value.indices);bases.put(value.firstVertex);offsets.put((long)value.firstIndex*4);value.submitted=true;}
         counts.flip();bases.flip();offsets.flip();GL30C.glBindVertexArray(page.vao);
         GL32C.glMultiDrawElementsBaseVertex(mode(primitive),counts,GL11C.GL_UNSIGNED_INT,offsets,bases);
     }
@@ -126,8 +159,8 @@ final class NativeMeshArena implements MeshArena {
     public boolean isClosed(){return closed;}
     public void close(){if(closed)return;for(Member member:new ArrayList<Member>(members))member.close();closed=true;retired.accept(this);}
     /** The native context already owns deletion after detach; no GL operation here. */
-    void abandon(){for(Member member:members)member.closed=true;members.clear();pages.clear();bytes=0;closed=true;}
-    private void retire(Page page){page.close();pages.remove(page);bytes-=page.bytes;}
+    void abandon(){for(Member member:members)member.closed=true;members.clear();pages.clear();pending.clear();bytes=0;closed=true;}
+    private void retire(Page page){page.close();pages.remove(page);bytes-=page.bytes;for(Iterator<RetiredRange> it=pending.iterator();it.hasNext();){RetiredRange range=it.next();if(range.page==page){GL32C.glDeleteSync(range.fence);it.remove();}}}
     private void empty(Page page){
         if(members.isEmpty()){
             for(Page unused:new ArrayList<Page>(pages))retire(unused);
@@ -142,11 +175,20 @@ final class NativeMeshArena implements MeshArena {
         private final String name;
         private final Page page;
         private final int firstVertex,vertices,firstIndex,indices,tag;
-        private boolean closed;
+        private boolean closed,submitted;
         Member(String name,Page page,int firstVertex,int vertices,int firstIndex,int indices,int tag){this.name=name;this.page=page;this.firstVertex=firstVertex;this.vertices=vertices;this.firstIndex=firstIndex;this.indices=indices;this.tag=tag;}
         NativeMeshArena owner(){return NativeMeshArena.this;}
         /** Used only by explicit MeshPipeline.combine, never by ordered arena draws. */
         void readVertices(ByteBuffer output){GL15C.glBindBuffer(GL31C.GL_COPY_READ_BUFFER,page.vbo);GL15C.glGetBufferSubData(GL31C.GL_COPY_READ_BUFFER,(long)firstVertex*page.layout.stride(),output);}
+        public MeshData snapshot(long maximumBytes) {
+            // The production terrain page stores its tag in the padding byte. The Metal layout ignores it.
+            if (isClosed() || !page.compact) return null;
+            return NativeMeshPipeline.snapshot(page.source, Math.multiplyExact(vertices, page.source.stride()), indices,
+                    IndexData.Type.UINT32, maximumBytes, this::readVertices, output -> {
+                        GL15C.glBindBuffer(GL31C.GL_COPY_READ_BUFFER,page.ibo);
+                        GL15C.glGetBufferSubData(GL31C.GL_COPY_READ_BUFFER,(long)firstIndex*4,output);
+                    });
+        }
         public String label(){return name;}
         public boolean isClosed(){return closed||NativeMeshArena.this.closed;}
         public VertexLayout layout(){return page.layout;}
@@ -155,11 +197,12 @@ final class NativeMeshArena implements MeshArena {
         public IndexData.Type indexType(){return IndexData.Type.UINT32;}
         public MeshPipeline.Usage usage(){return MeshPipeline.Usage.STATIC;}
         public void draw(Primitive primitive,int first,int count){
+            submitted=true;
             GL30C.glBindVertexArray(page.vao);GL32C.glDrawElementsBaseVertex(mode(primitive),count,GL11C.GL_UNSIGNED_INT,(long)(firstIndex+first)*4,firstVertex);
         }
         public void updateVertices(int first,ByteBuffer data){throw new IllegalStateException("Arena members are immutable");}
         public void updateIndices(IndexData data){throw new IllegalStateException("Arena members are immutable");}
-        public void close(){if(closed)return;closed=true;members.remove(this);page.vertices.release(firstVertex,vertices);page.indices.release(firstIndex,indices);if(--page.members==0)empty(page);}
+        public void close(){if(closed)return;release(this);closed=true;members.remove(this);if(--page.members==0)empty(page);}
     }
     private VertexLayout taggedLayout(VertexLayout source){
         boolean compact=source.equals(tags.packedLayout);int offset=compact?tags.packedOffset:(source.stride()+3)/4*4;

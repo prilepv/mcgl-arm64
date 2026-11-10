@@ -1,5 +1,12 @@
 import Foundation
 
+enum MCGLRenderer: String, CaseIterable {
+    case metal
+    case openGL = "opengl"
+
+    var title: String { self == .metal ? "Metal" : "OpenGL" }
+}
+
 /// Only the username is accepted here; passwords never enter preferences.
 final class MCGLLauncherPreferences {
     static let fpsLimits = [0, 60, 120, 144, 165, 180, 240]
@@ -12,6 +19,16 @@ final class MCGLLauncherPreferences {
     }
 
     var remembersLogin: Bool { defaults.bool(forKey: "MCGLRememberLogin") }
+
+    var renderer: MCGLRenderer {
+        get { defaults.string(forKey: "MCGLRenderer").flatMap(MCGLRenderer.init(rawValue:)) ?? .metal }
+        set { defaults.set(newValue.rawValue, forKey: "MCGLRenderer") }
+    }
+
+    var metalVSync: Bool {
+        get { (defaults.object(forKey: "MCGLMetalVSync") as? Bool) ?? true }
+        set { defaults.set(newValue, forKey: "MCGLMetalVSync") }
+    }
 
     var lastReadChangelogVersion: String? {
         get { defaults.string(forKey: "MCGLLastReadChangelogVersion") }

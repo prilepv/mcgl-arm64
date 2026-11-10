@@ -115,6 +115,12 @@ final class GuardedMeshPipeline implements MeshPipeline {
         public int indexCount() { return target.indexCount(); }
         public IndexData.Type indexType() { return target.indexType(); }
         public Usage usage() { return target.usage(); }
+        public MeshData snapshot(long maximumBytes) {
+            check();
+            if (maximumBytes < 1 || maximumBytes > 4L * 1024 * 1024)
+                throw new IllegalArgumentException("Invalid mesh readback budget");
+            return usage() == Usage.STATIC ? target.snapshot(maximumBytes) : null;
+        }
         public void draw(Primitive primitive, int first, int count) {
             check();
             if (primitive == null) throw new NullPointerException("primitive");

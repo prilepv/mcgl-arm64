@@ -103,7 +103,10 @@ public final class Display {
     public static void shutdown() { destroy(); window.shutdown(); }
     public static void makeCurrent() throws LWJGLException {
         window.makeCurrent();
-        try { GLContext.useContext(context, contextProfile, contextProfile == RenderProfile.CORE_41); }
+        try {
+            GLContext.useContext(context, contextProfile, contextProfile == RenderProfile.CORE_41);
+            window.prepareFrame();
+        }
         catch (Throwable failure) {
             window.releaseContext();
             if (failure instanceof LWJGLException) throw (LWJGLException) failure;
@@ -132,6 +135,7 @@ public final class Display {
         }
         if (processMessages) processMessages();
         RenderSystem.completeFrame(window.framebufferWidth(), window.framebufferHeight(), presented);
+        window.prepareFrame();
         MCGLDisplayMetrics.mcglProfileUpdateFinished(started, limited, swapped);
     }
     public static void processMessages() {

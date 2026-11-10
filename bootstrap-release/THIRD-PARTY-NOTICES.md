@@ -17,6 +17,13 @@ classpath; core/OpenGL natives are the official macOS ARM64 builds.
 The original multi-release classes and version metadata are retained.
 License: `Contents/Resources/Licenses/LWJGL3-LICENSE.txt`.
 
+## bgfx
+
+The Metal renderer uses bgfx from upstream commit
+`780f7bf00a29573473b90dcfab9f92a7d8687702` and the LWJGL 3.4.3 bgfx bindings.
+bgfx uses the BSD 2-Clause license.
+License: `Contents/Resources/Licenses/BGFX-LICENSE.txt`.
+
 ## GLFW 3.5.1
 
 Copyright (c) 2002-2006 Marcus Geelnard; Copyright (c) 2006-2019 Camilla Löwy.

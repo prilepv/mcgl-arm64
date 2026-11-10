@@ -60,6 +60,24 @@ final class NativeMeshPipeline implements MeshPipeline {
         if (GL15C.glGetBufferParameteri(target, GL15C.GL_BUFFER_SIZE) != bytes.remaining())
             throw new IllegalStateException("Driver did not allocate the requested mesh storage");
     }
+    static MeshData snapshot(VertexLayout layout, int vertexBytes, int indices, IndexData.Type type,
+                             long maximumBytes, java.util.function.Consumer<ByteBuffer> vertices,
+                             java.util.function.Consumer<ByteBuffer> elements) {
+        int indexBytes = Math.multiplyExact(indices, type.bytes);
+        if ((long)vertexBytes + indexBytes > maximumBytes) return null;
+        ByteBuffer verticesOut = ByteBuffer.allocateDirect(vertexBytes).order(ByteOrder.nativeOrder());
+        ByteBuffer indicesOut = ByteBuffer.allocateDirect(indexBytes).order(ByteOrder.nativeOrder());
+        int previous = GL11C.glGetInteger(GL31C.GL_COPY_READ_BUFFER);
+        try {
+            vertices.accept(verticesOut);
+            elements.accept(indicesOut);
+        } finally {
+            GL15C.glBindBuffer(GL31C.GL_COPY_READ_BUFFER, previous);
+        }
+        IndexData data = type == IndexData.Type.UINT16 ? IndexData.unsignedShort(indicesOut.asShortBuffer())
+                : IndexData.unsignedInt(indicesOut.asIntBuffer());
+        return new MeshData(layout, verticesOut, data);
+    }
     public Mesh combine(String label,List<Mesh> sources,IndexData indices) {
         if(abandoned)throw new IllegalStateException("Mesh pipeline is closed");
         List<Mesh> inputs=new ArrayList<Mesh>();VertexLayout layout=null;int vertices=0;
@@ -131,6 +149,11 @@ final class NativeMeshPipeline implements MeshPipeline {
         NativeMeshPipeline owner(){return NativeMeshPipeline.this;}
         void readVertices(ByteBuffer output){GL15C.glBindBuffer(GL31C.GL_COPY_READ_BUFFER,vbo);GL15C.glGetBufferSubData(GL31C.GL_COPY_READ_BUFFER,0,output);}
         void readIndices(ByteBuffer output){GL15C.glBindBuffer(GL31C.GL_COPY_READ_BUFFER,ibo);GL15C.glGetBufferSubData(GL31C.GL_COPY_READ_BUFFER,0,output);}
+        @Override public MeshData snapshot(long maximumBytes) {
+            if (closed || usage != Usage.STATIC) return null;
+            return NativeMeshPipeline.snapshot(layout, Math.multiplyExact(vertices, layout.stride()), indices, type,
+                    maximumBytes, this::readVertices, this::readIndices);
+        }
         public void draw(Primitive primitive, int first, int count) {
             int mode = primitive == Primitive.TRIANGLES ? GL11C.GL_TRIANGLES
                     : primitive == Primitive.LINES ? GL11C.GL_LINES : GL11C.GL_POINTS;

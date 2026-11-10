@@ -11,9 +11,21 @@ public final class GameGeometry {
             a(0, 3, VertexLayout.Storage.FLOAT32, false, 0), a(1, 4, VertexLayout.Storage.FLOAT32, false, 12),
             a(2, 2, VertexLayout.Storage.FLOAT32, false, 28), a(3, 2, VertexLayout.Storage.FLOAT32, false, 36),
             a(4, 3, VertexLayout.Storage.FLOAT32, false, 44), a(7, 1, VertexLayout.Storage.FLOAT32, false, 56));
+    public static final VertexLayout RAW_QUAD_LAYOUT;
+    static {
+        List<VertexLayout.Attribute> fields = new ArrayList<VertexLayout.Attribute>(ChunkMeshBuilder.LAYOUT.attributes());
+        fields.add(a(5, 4, VertexLayout.Storage.UINT8, true, 32));
+        fields.add(a(6, 3, VertexLayout.Storage.INT8, true, 36));
+        RAW_QUAD_LAYOUT = new VertexLayout(40, fields.toArray(new VertexLayout.Attribute[0]));
+    }
     public final MeshData mesh;
     public final Mesh.Primitive primitive;
     public final int attributeMask;
+    private GameGeometry(MeshData mesh, int attributes) {
+        this.mesh = mesh;
+        primitive = Mesh.Primitive.TRIANGLES;
+        attributeMask = attributes;
+    }
     private GameGeometry(VertexLayout layout, ByteBuffer data, int vertices, int mode, int attributes) {
         int[] indices = indices(mode, vertices);
         boolean lines = mode >= 1 && mode <= 3;
@@ -84,6 +96,8 @@ public final class GameGeometry {
         if (convertedQuads) throw new IllegalArgumentException("Historical converted-quad accumulator is unsupported");
         if (raw == null || vertices < 0 || vertices > 4 * 1024 * 1024 || words != (long)vertices * 8 || words > raw.length)
             throw new IllegalArgumentException("Invalid game accumulator size");
+        int attributes = 1 | (color ? 2 : 0) | (texture ? 4 : 0) | (lighting ? 8 : 0) | (normals ? 16 : 0);
+        if (mode == 7) return rawQuads(raw, vertices, texture, attributes);
         ByteBuffer bytes = ByteBuffer.allocateDirect(Math.multiplyExact(words, 4)).order(ByteOrder.nativeOrder());
         for (int v = 0; v < vertices; v++) {
             for (int n = 0; n < 8; n++) {
@@ -94,8 +108,28 @@ public final class GameGeometry {
             }
         }
         bytes.flip();
-        return new GameGeometry(ChunkMeshBuilder.LAYOUT, bytes, vertices, mode,
-                1 | (color ? 2 : 0) | (texture ? 4 : 0) | (lighting ? 8 : 0) | (normals ? 16 : 0));
+        return new GameGeometry(ChunkMeshBuilder.LAYOUT, bytes, vertices, mode, attributes);
+    }
+    private static GameGeometry rawQuads(int[] raw, int vertices, boolean textured, int attributes) {
+        if (vertices % 4 != 0) throw new IllegalArgumentException("Incomplete game quad");
+        ByteBuffer bytes = ByteBuffer.allocateDirect(Math.multiplyExact(vertices, RAW_QUAD_LAYOUT.stride())).order(ByteOrder.nativeOrder());
+        int finiteWords = textured ? 5 : 3;
+        for (int face = 0; face < vertices * 8; face += 32) {
+            int flatColor = raw[face + 29], flatNormal = raw[face + 30];
+            for (int vertex = face; vertex < face + 32; vertex += 8) {
+                for (int word = 0; word < finiteWords; word++) {
+                    int value = raw[vertex + word];
+                    if (!Float.isFinite(Float.intBitsToFloat(value))) throw new IllegalArgumentException("Non-finite game vertex");
+                    bytes.putInt(value);
+                }
+                for (int word = finiteWords; word < 8; word++) bytes.putInt(raw[vertex + word]);
+                bytes.putInt(flatColor).putInt(flatNormal);
+                bytes.put(bytes.position() - 1, (byte)0);
+            }
+        }
+        bytes.flip();
+        MeshData mesh = MeshData.takeOwnedVertices(RAW_QUAD_LAYOUT, bytes, IndexData.quads(vertices));
+        return new GameGeometry(mesh, attributes | 32 | 64);
     }
     /** Absolute NIO reads preserve the producer's position and limit. */
     public static GameGeometry floats(ByteBuffer bytes, int mode, int attributes) {

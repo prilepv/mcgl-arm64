@@ -31,6 +31,7 @@ final class GameTerrainBatch {
     private boolean arrayTables;
     private final int[] textures=new int[GameChunkTextures.SIZE];
     private final double[] singleMatrix=new double[16];
+    private final double[] nextMatrix=new double[16];
     private MeshArena arena;
     private ShaderProgram program,materialProgram,unlitProgram,unlitMaterialProgram;
     private Mesh.Primitive primitive;
@@ -57,10 +58,15 @@ final class GameTerrainBatch {
                 ?context.meshes().createArena("game/original-terrain",6*1024*1024,9*1024*1024,320L*1024*1024,new MeshArena.Tags(tags,GameTerrainFormat.LAYOUT,39))
                 :context.meshes().createArena("game/original-terrain",2*1024*1024,3*1024*1024,256L*1024*1024);
         Mesh mesh=arena.create("game/original-member",data);
-        if(mesh!=null)return mesh;
-        mesh=context.meshes().create("game/original-fallback",data,MeshPipeline.Usage.STATIC);
-        if(data.vertexCount()<=2*1024*1024&&data.indices().count()<=3*1024*1024
-                &&transferBytes(mesh)<=RECOVERY_BYTES)waiting.add(recovery);
+        if(mesh==null){
+            mesh=context.meshes().create("game/original-fallback",data,MeshPipeline.Usage.STATIC);
+            if(data.vertexCount()<=2*1024*1024&&data.indices().count()<=3*1024*1024
+                    &&transferBytes(mesh)<=RECOVERY_BYTES)waiting.add(recovery);
+        }
+        MetalTerrainPreview preview=renderer.metalTerrain();
+        if(preview!=null)preview.remember(mesh,data);
+        MetalWorldCapture capture=renderer.worldCapture();
+        if(capture!=null)capture.remember(mesh,data);
         return mesh;
     }
     private static long transferBytes(Mesh mesh){return (long)mesh.vertexCount()*mesh.layout().stride()+(long)mesh.indexCount()*mesh.indexType().bytes;}
@@ -102,7 +108,7 @@ final class GameTerrainBatch {
     }
     boolean append(Mesh mesh,Mesh.Primitive primitive,int mask){
         if(arena==null||!arena.contains(mesh))return false;
-        int tag=arena.tag(mesh);double[] matrix=renderer.state.matrices.modelView();
+        int tag=arena.tag(mesh);renderer.state.matrices.copyModelView(nextMatrix);double[] matrix=nextMatrix;
         boolean materials=materialTablesEnabled&&(mask&~127)==0&&renderer.originalMaterialsEligible();
         int texture=materials?renderer.originalTexture():0;
         if(!queued.isEmpty()&&(queued.size()==MeshArena.MAX_DRAWS||this.primitive!=primitive
@@ -146,31 +152,46 @@ final class GameTerrainBatch {
     void flush(){
         if(queued.isEmpty()||flushing)return;flushing=true;
         try{
+            MetalWorldCapture capture=renderer.worldCapture();
+            if(capture!=null)capture.batch(arena,queued,mask,matrices,inputs,textures,materialBatch);
             if(queued.size()==1){
                 for(int i=0;i<16;i++)singleMatrix[i]=matrices.get(firstTag*16+i);
                 if(materialBatch)renderer.drawTerrainSingle(queued.get(0),primitive,mask,singleMatrix,firstTexture);
                 else renderer.drawTerrainSingle(queued.get(0),primitive,mask,singleMatrix);
             }else{
                 matrices.clear();
-                boolean unlit=GameRenderer.unlitShaders();
-                GameTextureArrays.Page selectedArray=materialBatch&&arrayTables&&textureCount>1?matchingArray(-1):null;
-                if(selectedArray!=null){
-                    ShaderProgram selected;
-                    if(unlit){if(unlitArrayProgram==null)unlitArrayProgram=context.shaders().create(GameMaterialProgram.originalArraySources(true,tags));selected=unlitArrayProgram;}
-                    else{if(arrayProgram==null)arrayProgram=context.shaders().create(GameMaterialProgram.originalArraySources(false,tags));selected=arrayProgram;}
-                    arrayInputs.clear();for(int i=0;i<tags;i++){int value=inputs.get(i),slot=value&15;arrayInputs.put(i,occupied[i]?((value>>4)<<8)|arrayLayers[slot-1]:0);}
-                    renderer.drawTerrainArray(arena,queued,primitive,selected,matrices,arrayInputs,arrays,selectedArray,vertices);
-                }else if(materialBatch&&(mixedMasks||textureCount>1||firstTexture!=renderer.originalTexture())){
-                    if(textureCount>2)throw new IllegalStateException("Array group lost its protected textures");
-                    ShaderProgram selected;
-                    if(unlit){if(unlitMaterialProgram==null)unlitMaterialProgram=context.shaders().create(GameMaterialProgram.originalBatchSources(true,true,tags));selected=unlitMaterialProgram;}
-                    else{if(materialProgram==null)materialProgram=context.shaders().create(GameMaterialProgram.originalBatchSources(true,false,tags));selected=materialProgram;}
-                    inputs.clear();renderer.drawTerrainMaterials(arena,queued,primitive,selected,matrices,inputs,textures,textureCount,vertices);
-                }else{
-                    ShaderProgram selected;
-                    if(unlit){if(unlitProgram==null)unlitProgram=context.shaders().create(GameMaterialProgram.originalBatchSources(false,true,tags));selected=unlitProgram;}
-                    else{if(program==null)program=context.shaders().create(GameMaterialProgram.originalBatchSources(false,false,tags));selected=program;}
-                    renderer.drawTerrainBatch(arena,queued,primitive,mask,selected,matrices,vertices);
+                MetalTerrainPreview preview=renderer.metalTerrain();
+                if(preview!=null&&preview.drawVisible(arena,queued,mask,matrices,inputs,textures,materialBatch,vertices)){
+                    renderer.countMetalTerrain(vertices);
+                    batchedParts+=queued.size();batches++;
+                    return;
+                }
+                boolean replay=preview!=null&&preview.begin(arena,queued,mask,matrices,inputs,textures,materialBatch,vertices);
+                boolean drawn=false;
+                try {
+                    boolean unlit=GameRenderer.unlitShaders();
+                    GameTextureArrays.Page selectedArray=materialBatch&&arrayTables&&textureCount>1?matchingArray(-1):null;
+                    if(selectedArray!=null){
+                        ShaderProgram selected;
+                        if(unlit){if(unlitArrayProgram==null)unlitArrayProgram=context.shaders().create(GameMaterialProgram.originalArraySources(true,tags));selected=unlitArrayProgram;}
+                        else{if(arrayProgram==null)arrayProgram=context.shaders().create(GameMaterialProgram.originalArraySources(false,tags));selected=arrayProgram;}
+                        arrayInputs.clear();for(int i=0;i<tags;i++){int value=inputs.get(i),slot=value&15;arrayInputs.put(i,occupied[i]?((value>>4)<<8)|arrayLayers[slot-1]:0);}
+                        renderer.drawTerrainArray(arena,queued,primitive,selected,matrices,arrayInputs,arrays,selectedArray,vertices);
+                    }else if(materialBatch&&(mixedMasks||textureCount>1||firstTexture!=renderer.originalTexture())){
+                        if(textureCount>2)throw new IllegalStateException("Array group lost its protected textures");
+                        ShaderProgram selected;
+                        if(unlit){if(unlitMaterialProgram==null)unlitMaterialProgram=context.shaders().create(GameMaterialProgram.originalBatchSources(true,true,tags));selected=unlitMaterialProgram;}
+                        else{if(materialProgram==null)materialProgram=context.shaders().create(GameMaterialProgram.originalBatchSources(true,false,tags));selected=materialProgram;}
+                        inputs.clear();renderer.drawTerrainMaterials(arena,queued,primitive,selected,matrices,inputs,textures,textureCount,vertices);
+                    }else{
+                        ShaderProgram selected;
+                        if(unlit){if(unlitProgram==null)unlitProgram=context.shaders().create(GameMaterialProgram.originalBatchSources(false,true,tags));selected=unlitProgram;}
+                        else{if(program==null)program=context.shaders().create(GameMaterialProgram.originalBatchSources(false,false,tags));selected=program;}
+                        renderer.drawTerrainBatch(arena,queued,primitive,mask,selected,matrices,vertices);
+                    }
+                    drawn=true;
+                } finally {
+                    if(replay)preview.finish(drawn);
                 }
                 batchedParts+=queued.size();batches++;
                 if(!reported){reported=true;if(Boolean.getBoolean("mcgl.graphics.profile"))System.out.println("[MCGL Terrain Batch] ordered original model runs; shared GPU ranges; exact matrix palette; original local transparency");}

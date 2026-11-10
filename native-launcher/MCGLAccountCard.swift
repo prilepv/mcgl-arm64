@@ -12,18 +12,16 @@ final class MCGLAccountCard: NSView {
     private let destruction = NSTextField(labelWithString: "—")
     private let freshness = NSTextField(labelWithString: "")
     private let resources: URL
-    private let compact: Bool
-
-    init(resources: URL, compact: Bool = false) {
+    private lazy var cardHeight = heightAnchor.constraint(equalToConstant: 148)
+    init(resources: URL) {
         self.resources = resources
-        self.compact = compact
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = GalaxyTheme.panel.cgColor
         layer?.cornerRadius = 16
         layer?.borderWidth = 1
         layer?.borderColor = GalaxyTheme.line.cgColor
-        title.font = .systemFont(ofSize: compact ? 16 : 17, weight: .semibold)
+        title.font = .systemFont(ofSize: 17, weight: .semibold)
         title.identifier = NSUserInterfaceItemIdentifier("account-title")
         title.textColor = .white
         title.lineBreakMode = .byTruncatingTail
@@ -55,15 +53,15 @@ final class MCGLAccountCard: NSView {
         NSLayoutConstraint.activate([
             avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             avatar.topAnchor.constraint(equalTo: topAnchor, constant: 20),
-            avatar.widthAnchor.constraint(equalToConstant: compact ? 44 : 48),
+            avatar.widthAnchor.constraint(equalToConstant: 48),
             avatar.heightAnchor.constraint(equalTo: avatar.widthAnchor),
             title.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 12),
             title.topAnchor.constraint(equalTo: avatar.topAnchor, constant: 2),
-            title.trailingAnchor.constraint(equalTo: compact ? trailingAnchor : leadingAnchor, constant: compact ? -18 : 280),
+            title.trailingAnchor.constraint(equalTo: makeBadge.leadingAnchor, constant: -12),
             nickname.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             nickname.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
             nickname.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            professionIcon.widthAnchor.constraint(equalToConstant: compact ? 18 : 24),
+            professionIcon.widthAnchor.constraint(equalToConstant: 24),
             professionIcon.heightAnchor.constraint(equalTo: professionIcon.widthAnchor),
             profession.leadingAnchor.constraint(equalTo: professionIcon.trailingAnchor, constant: 7),
             profession.centerYAnchor.constraint(equalTo: professionIcon.centerYAnchor),
@@ -75,32 +73,29 @@ final class MCGLAccountCard: NSView {
             crushBadge.topAnchor.constraint(equalTo: makeBadge.topAnchor),
             freshness.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             freshness.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20),
-            freshness.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -15)
+            freshness.centerYAnchor.constraint(equalTo: topAnchor, constant: 118),
+            professionIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            professionIcon.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 14),
+            crushBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            makeBadge.topAnchor.constraint(equalTo: topAnchor, constant: 20),
+            makeBadge.widthAnchor.constraint(equalToConstant: 110),
+            cardHeight
         ])
-        if compact {
-            // One small identity header; aliases, timestamps and account actions
-            // stay in the manager rather than expanding the Play summary.
-            [nickname, freshness].forEach { $0.isHidden = true }
-            NSLayoutConstraint.activate([
-                professionIcon.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-                professionIcon.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
-                makeBadge.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 16),
-                makeBadge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-                crushBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20)
-            ])
-        } else {
-            NSLayoutConstraint.activate([
-                professionIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-                professionIcon.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 14),
-                makeBadge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 300),
-                makeBadge.topAnchor.constraint(equalTo: topAnchor, constant: 20),
-                makeBadge.widthAnchor.constraint(equalToConstant: 124),
-                heightAnchor.constraint(equalToConstant: 148)
-            ])
-        }
     }
 
     required init?(coder: NSCoder) { nil }
+
+    func attachCredentials(_ credentials: NSView) {
+        cardHeight.constant = 222
+        credentials.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(credentials)
+        NSLayoutConstraint.activate([
+            credentials.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            credentials.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            credentials.topAnchor.constraint(equalTo: topAnchor, constant: 141),
+            credentials.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -15)
+        ])
+    }
 
     func reserveFooterSpace(before actions: NSView) {
         freshness.trailingAnchor.constraint(equalTo: actions.leadingAnchor, constant: -14).isActive = true
@@ -136,7 +131,7 @@ final class MCGLAccountCard: NSView {
     }
 
     func update(account: MCGLAccount?, selected: Bool, status: String) {
-        title.stringValue = (compact ? account?.nickname : account?.title) ?? "Выберите аккаунт"
+        title.stringValue = account?.title ?? "Выберите аккаунт"
         title.toolTip = title.stringValue
         nickname.stringValue = account.map { $0.label.isEmpty ? "" : $0.nickname } ?? ""
         let info = account?.info
@@ -150,8 +145,7 @@ final class MCGLAccountCard: NSView {
         destruction.setAccessibilityLabel("Разрушение: \(destruction.stringValue)")
         freshness.stringValue = status
         freshness.toolTip = status
-        toolTip = compact ? status : nil
-        layer?.borderColor = (selected && !compact ? GalaxyTheme.blue : GalaxyTheme.line).cgColor
+        layer?.borderColor = (selected ? GalaxyTheme.blue : GalaxyTheme.line).cgColor
         avatar.image = info?.avatar.flatMap(Self.thumbnail)
             ?? NSImage(systemSymbolName: "person.fill", accessibilityDescription: "Аватар")
     }

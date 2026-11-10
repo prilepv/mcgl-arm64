@@ -55,9 +55,11 @@ public final class MeshArenaProbe {
         imports(pipeline,program,palette,matrices);
         partialPage(pipeline,red);
         packedTags(context);
+        queuedRetirement(context);
         foreign(()->{rejects(()->arena.tag(a));rejects(()->arena.draw(Mesh.Primitive.TRIANGLES,Arrays.asList(a,b)));rejects(()->arena.create("arena/foreign-thread",red));rejects(arena::close);rejects(a::close);rejects(()->palette.setMatrix4Array(matrices));});
         long created=arena.pageCreations();a.close();a.close();Mesh replacement=arena.create("arena/reused-hole",red);
-        check(arena.pageCreations()==created&&arena.residentMembers()==4&&!b.isClosed()&&replacement!=null,"retiring one member reuses its range without touching neighbors or creating a page");
+        if(replacement==null){GL11C.glFinish();replacement=arena.create("arena/reused-completed-hole",red);}
+        check(arena.pageCreations()==created&&arena.residentMembers()==4&&!b.isClosed()&&replacement!=null,"completed retired ranges are reused without touching neighbors or creating a page");
         rejects(()->arena.tag(a));rejects(()->a.draw(Mesh.Primitive.TRIANGLES));
         // Generic mesh combination remains valid even when a source is a page slice.
         try(Mesh combined=pipeline.combine("arena/combined",Arrays.asList(replacement,b),IndexData.of(0,1,2,0,2,3,4,5,6,4,6,7))){
@@ -69,6 +71,37 @@ public final class MeshArenaProbe {
         check(GL11C.glGetError()==0,"shared pages and matrix arrays are Core-valid");System.out.println("MESH_ARENA_GPU_PASS checks="+checks);return checks;
     }
     public static int verifyRetired(){int before=checks;check(retainedArena.isClosed()&&retainedMember.isClosed()&&retainedProgram.isClosed(),"context destruction invalidates live arenas, member views and palettes");rejects(()->retainedMember.draw(Mesh.Primitive.TRIANGLES));rejects(()->retainedArena.residentBytes());rejects(()->retainedPalette.setMatrix4Array(buffer(2048).asFloatBuffer()));retainedMember.close();retainedArena.close();retainedProgram.close();return checks-before;}
+    /** Reuse a full page immediately after queued draws, before any readback or finish. */
+    private static void queuedRetirement(RenderContext context){
+        int previousProgram=GL11C.glGetInteger(GL20C.GL_CURRENT_PROGRAM);
+        try(ShaderProgram shader=context.shaders().create(new ShaderSources("arena/queued-palette",VERTEX,FRAGMENT))){
+            FloatBuffer identity=buffer(32*64).asFloatBuffer();for(int tag=0;tag<32;tag++)for(int i=0;i<16;i++)identity.put(tag*16+i,i%5==0?1:0);
+            shader.uniform("palette").setMatrix4Array(identity);shader.bind();
+            GL11C.glDisable(GL11C.GL_BLEND);
+            for(boolean packed:new boolean[]{false,true}){
+                VertexLayout layout=packed?new VertexLayout(20,new VertexLayout.Attribute(0,3,VertexLayout.Storage.FLOAT32,false,0),new VertexLayout.Attribute(1,4,VertexLayout.Storage.UINT8,true,12)):VertexFormats.POSITION_COLOR;
+                MeshData[] inputs=new MeshData[2];byte[][] expected=new byte[2][];
+                for(int n=0;n<2;n++){
+                    MeshData plain=data(n==0?255:0,0,n==1?255:0,255);ByteBuffer vertices=plain.vertices();
+                    if(packed){ByteBuffer padded=buffer(80);for(int v=0;v<4;v++){for(int b=0;b<16;b++)padded.put(vertices.get(v*16+b));padded.putInt(0x12345678);}padded.flip();vertices=padded;}
+                    inputs[n]=new MeshData(layout,vertices,IndexData.quads(4));
+                    try(Mesh reference=context.meshes().create("arena/queued-reference",inputs[n],MeshPipeline.Usage.STATIC)){clear();reference.draw(Mesh.Primitive.TRIANGLES);expected[n]=pixels();}
+                }
+                try(MeshArena arena=context.meshes().createArena("arena/queued",8,12,208,packed?new MeshArena.Tags(32,layout,19):new MeshArena.Tags(32))){
+                    Mesh anchor=arena.create("arena/queued-anchor",inputs[0]),current=arena.create("arena/queued-current",inputs[0]);
+                    for(int iteration=0;iteration<128;iteration++){
+                        int old=iteration%2,next=1-old;clear();arena.draw(Mesh.Primitive.TRIANGLES,Collections.singletonList(current));current.close();
+                        current=arena.create("arena/queued-replacement",inputs[next]);
+                        if(current==null){GL11C.glFinish();current=arena.create("arena/queued-completed",inputs[next]);}
+                        check(current!=null,"completed ranges become reusable inside the fixed budget");
+                        check(Arrays.equals(expected[old],pixels()),"uploading replacement cannot corrupt an earlier queued draw");
+                        clear();current.draw(Mesh.Primitive.TRIANGLES);check(Arrays.equals(expected[next],pixels()),"replacement retains exact vertex bytes and palette tag");
+                    }
+                    current.close();anchor.close();check(arena.residentPages()==0&&arena.residentBytes()==0,"pending retirement is released with the final page");
+                }
+            }
+        }finally{GL20C.glUseProgram(previousProgram);}
+    }
     private static void packedTags(RenderContext context){
         VertexLayout layout=new VertexLayout(20,new VertexLayout.Attribute(0,3,VertexLayout.Storage.FLOAT32,false,0),new VertexLayout.Attribute(1,4,VertexLayout.Storage.UINT8,true,12));
         rejects(()->new MeshArena.Tags(0));rejects(()->new MeshArena.Tags(33));rejects(()->new MeshArena.Tags(256));

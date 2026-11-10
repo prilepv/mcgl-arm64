@@ -74,6 +74,13 @@ final class GameTextBatch {
             int bucket=0;while((16<<bucket)<count)bucket++;
             VertexLayout layout=lighting?LIT_LAYOUT:LAYOUT;
             ByteBuffer upload=staging.duplicate().order(ByteOrder.nativeOrder());upload.position(0);upload.limit((16<<bucket)*6*layout.stride());
+            MetalWorldCapture capture = renderer.worldCapture();
+            if (capture != null) capture.text(upload, count * 6, layout.stride());
+            if (MetalGameTarget.independent()) {
+                submissions++;
+                submittedGlyphs += count;
+                return;
+            }
             Mesh mesh=streams.acquire(new MeshData(layout,upload,INDICES[bucket]));
             if(mesh==null)throw new IllegalStateException("Bounded text run exceeds stream budget");
             ShaderProgram selected;

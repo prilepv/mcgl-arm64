@@ -15,6 +15,8 @@ public interface Mesh extends AutoCloseable {
     int indexCount();
     IndexData.Type indexType();
     MeshPipeline.Usage usage();
+    /** Optional bounded readback of immutable geometry for the Metal migration diagnostic. */
+    default MeshData snapshot(long maximumBytes) { return null; }
     /** Binds this VAO and leaves it bound; caller supplies program, textures and render state. */
     void draw(Primitive primitive, int firstIndex, int indexCount);
     default void draw(Primitive primitive) { draw(primitive, 0, indexCount()); }

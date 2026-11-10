@@ -2,12 +2,12 @@ import Cocoa
 import Darwin
 
 enum GalaxyTheme {
-    static let ink = NSColor(srgbRed: 0.025, green: 0.024, blue: 0.055, alpha: 1)
-    static let panel = NSColor(srgbRed: 0.045, green: 0.041, blue: 0.085, alpha: 0.96)
-    static let blue = NSColor(srgbRed: 0.32, green: 0.27, blue: 0.76, alpha: 1)
-    static let cyan = NSColor(srgbRed: 0.68, green: 0.69, blue: 1, alpha: 1)
-    static let muted = NSColor(srgbRed: 0.64, green: 0.64, blue: 0.77, alpha: 1)
-    static let line = NSColor(srgbRed: 0.46, green: 0.43, blue: 0.70, alpha: 0.26)
+    static let ink = NSColor(srgbRed: 0.045, green: 0.040, blue: 0.085, alpha: 1)
+    static let panel = NSColor(srgbRed: 0.14, green: 0.12, blue: 0.24, alpha: 0.57)
+    static let blue = NSColor(srgbRed: 0.39, green: 0.28, blue: 0.94, alpha: 1)
+    static let cyan = NSColor(srgbRed: 0.76, green: 0.75, blue: 1, alpha: 1)
+    static let muted = NSColor(srgbRed: 0.71, green: 0.69, blue: 0.81, alpha: 1)
+    static let line = NSColor.white.withAlphaComponent(0.10)
 }
 
 enum MCGLLaunchState: CaseIterable {
@@ -36,20 +36,174 @@ enum MCGLLaunchState: CaseIterable {
     var acceptsReturn: Bool { self == .ready }
 }
 
-/// Native NSButton behavior (keyboard, accessibility and actions), custom paint only.
-final class GalaxyButton: NSButton {
+/// A layer-backed tint that leaves native labels and controls in charge of drawing and input.
+private final class GalaxyHoverGlow {
+    private var gradient: CAGradientLayer?
+    var tint = GalaxyTheme.cyan
+    var strength: CGFloat = 0.24
+
+    func layout(in view: NSView) {
+        guard let gradient else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = view.bounds
+        CATransaction.commit()
+    }
+
+    func update(in view: NSView, opacity: Float, animated: Bool) {
+        guard let backing = view.layer, opacity > 0 || gradient != nil else { return }
+        if gradient == nil {
+            let layer = CAGradientLayer()
+            layer.name = "galaxy-hover-glow"
+            layer.startPoint = CGPoint(x: 0, y: 0.5)
+            layer.endPoint = CGPoint(x: 1, y: 0.5)
+            layer.cornerRadius = backing.cornerRadius > 0 ? backing.cornerRadius : 9
+            layer.opacity = 0
+            backing.insertSublayer(layer, at: 0)
+            gradient = layer
+            layout(in: view)
+        }
+        guard let gradient else { return }
+        let previous = gradient.presentation()?.opacity ?? gradient.opacity
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.colors = [tint.withAlphaComponent(strength).cgColor, tint.withAlphaComponent(0.035).cgColor]
+        gradient.opacity = opacity
+        CATransaction.commit()
+        if animated, previous != opacity, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = previous
+            animation.toValue = opacity
+            animation.duration = 0.24
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            gradient.add(animation, forKey: "hover-glow")
+        } else {
+            gradient.removeAnimation(forKey: "hover-glow")
+        }
+    }
+}
+
+/// Shared feedback for the launcher’s native, keyboard-accessible buttons.
+class GalaxyInteractiveButton: NSButton {
+    private var pointerTracking: NSTrackingArea?
+    private let hoverGlow = GalaxyHoverGlow()
+    private(set) var pointerInside = false
+    private(set) var pointerPressed = false
+    var restingGlowOpacity: Float { 0 }
+
+    func setGlowTint(_ tint: NSColor, strength: CGFloat) {
+        hoverGlow.tint = tint
+        hoverGlow.strength = strength
+    }
+
+    override func layout() {
+        super.layout()
+        hoverGlow.layout(in: self)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeInKeyWindow, .mouseEnteredAndExited],
+                                  owner: self)
+        addTrackingArea(area)
+        pointerTracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        pointerInside = true
+        refreshFeedback(animated: true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        pointerInside = false
+        refreshFeedback(animated: true)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        pointerPressed = true
+        refreshFeedback(animated: true)
+        displayIfNeeded()
+        super.mouseDown(with: event)
+        pointerPressed = false
+        if let window {
+            pointerInside = visibleRect.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        }
+        refreshFeedback(animated: true)
+    }
+
+    override var isEnabled: Bool {
+        didSet { refreshFeedback(animated: false) }
+    }
+
+    func refreshFeedback(animated: Bool) {
+        needsDisplay = true
+        guard let layer else { return }
+        let glow: Float = isEnabled && pointerInside ? (pointerPressed ? 0.63 : 1) : restingGlowOpacity
+        hoverGlow.update(in: self, opacity: glow, animated: animated)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let scale: CGFloat = isEnabled && pointerPressed && !reduceMotion ? 0.98 : 1
+        let previous = layer.presentation()?.value(forKeyPath: "transform.scale")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = CATransform3DMakeScale(scale, scale, 1)
+        CATransaction.commit()
+        if animated && !reduceMotion, let previous {
+            let animation = CABasicAnimation(keyPath: "transform.scale")
+            animation.fromValue = previous
+            animation.toValue = scale
+            animation.duration = pointerPressed ? 0.085 : 0.15
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer.add(animation, forKey: "galaxy-press")
+        }
+    }
+}
+
+private final class GalaxyPopUpButton: NSPopUpButton {
+    private let hoverGlow = GalaxyHoverGlow()
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeInKeyWindow, .mouseEnteredAndExited],
+                                  owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func layout() {
+        super.layout()
+        hoverGlow.layout(in: self)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        hoverGlow.update(in: self, opacity: isEnabled ? 1 : 0, animated: true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hoverGlow.update(in: self, opacity: 0, animated: true)
+    }
+
+    override var isEnabled: Bool {
+        didSet { if !isEnabled { hoverGlow.update(in: self, opacity: 0, animated: false) } }
+    }
+}
+
+final class GalaxyButton: GalaxyInteractiveButton {
     enum Style { case primary, secondary, navigation }
     var style: Style = .secondary
     var symbol: String?
     var selected = false { didSet { needsDisplay = true } }
-    override var isEnabled: Bool { didSet { needsDisplay = true } }
-
     func contentLayout(textSize: NSSize) -> (icon: NSRect, text: NSPoint) {
         let iconWidth: CGFloat = symbol == nil ? 0 : 18
         // Icon-only actions have no label gap; otherwise they sit 4 pt off centre.
         let gap: CGFloat = symbol != nil && !title.isEmpty ? 8 : 0
         let contentWidth = iconWidth + gap + textSize.width
-        let x = style == .navigation ? bounds.minX + 16 : bounds.midX - contentWidth / 2
+        let x = bounds.midX - contentWidth / 2
         return (NSRect(x: x, y: bounds.midY - 9, width: iconWidth, height: 18),
                 NSPoint(x: x + iconWidth + gap, y: bounds.midY - textSize.height / 2))
     }
@@ -58,20 +212,22 @@ final class GalaxyButton: NSButton {
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
                                  xRadius: 10, yRadius: 10)
         let fill: NSColor = style == .primary ? GalaxyTheme.blue
-            : selected ? GalaxyTheme.blue.withAlphaComponent(0.19)
-            : style == .navigation ? .clear : NSColor.white.withAlphaComponent(0.055)
+            : selected ? NSColor.white.withAlphaComponent(0.13)
+            : style == .navigation ? .clear : NSColor.white.withAlphaComponent(0.075)
         fill.withAlphaComponent(isEnabled ? fill.alphaComponent : fill.alphaComponent * 0.4).setFill()
         shape.fill()
-        if isHighlighted {
-            NSColor.white.withAlphaComponent(0.10).setFill()
+        if isEnabled && (pointerInside || pointerPressed || isHighlighted) {
+            let pressed = pointerPressed || isHighlighted
+            let tint: NSColor = pressed ? .black : .white
+            tint.withAlphaComponent(pressed ? 0.16 : 0.075).setFill()
             shape.fill()
         }
-        if style != .navigation || selected {
-            (selected ? GalaxyTheme.blue.withAlphaComponent(0.55) : GalaxyTheme.line).setStroke()
+        if style == .secondary || style == .primary {
+            GalaxyTheme.line.setStroke()
             shape.lineWidth = 1
             shape.stroke()
         }
-        let color = (selected ? GalaxyTheme.cyan : NSColor.white)
+        let color = (style == .navigation && !selected ? GalaxyTheme.muted : NSColor.white)
             .withAlphaComponent(isEnabled ? 1 : 0.36)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: style == .primary ? 15 : 13,
@@ -94,6 +250,116 @@ final class GalaxyButton: NSButton {
             shape.lineWidth = 2
             shape.stroke()
         }
+    }
+}
+
+/// Lets a native button own clicks and focus even when it contains visual labels.
+class GalaxyContentButton: GalaxyInteractiveButton {
+    var restingFill = NSColor.white.withAlphaComponent(0.045)
+    var restingBorder = GalaxyTheme.line
+    var selectedAppearance = false { didSet { refreshFeedback(animated: false) } }
+
+    override func refreshFeedback(animated: Bool) {
+        super.refreshFeedback(animated: animated)
+        guard let layer else { return }
+        let fill = selectedAppearance ? NSColor.white.withAlphaComponent(0.13) : restingFill
+        let opacity = pointerPressed ? -0.035 : pointerInside ? 0.055 : 0
+        let border = selectedAppearance ? GalaxyTheme.cyan.withAlphaComponent(0.62)
+            : isEnabled && pointerInside ? NSColor.white.withAlphaComponent(0.22) : restingBorder
+        CATransaction.begin()
+        let animate = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        CATransaction.setDisableActions(!animate)
+        CATransaction.setAnimationDuration(0.13)
+        layer.backgroundColor = fill.withAlphaComponent(max(0, fill.alphaComponent + (isEnabled ? opacity : 0))).cgColor
+        layer.borderColor = border.cgColor
+        CATransaction.commit()
+
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+}
+
+private final class GalaxyEffectsOverlay: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class GalaxyMetalButton: GalaxyContentButton {
+    private var starsActive = false
+    private var stars: CALayer?
+    weak var effectsHost: NSView?
+    override var restingGlowOpacity: Float { !isEnabled ? 0.25 : selectedAppearance ? 0.60 : 0.43 }
+
+    func setStarsActive(_ active: Bool) {
+        starsActive = active
+        updateStars()
+    }
+
+    override func layout() {
+        super.layout()
+        updateStars()
+    }
+
+    private func updateStars() {
+        guard starsActive, let effectsHost, let host = effectsHost.layer,
+              let window, effectsHost.window === window, bounds.width > 0, bounds.height > 0 else {
+            stars?.removeFromSuperlayer()
+            stars = nil
+            return
+        }
+        let inset: CGFloat = 32
+        let frame = effectsHost.convert(bounds, from: self).insetBy(dx: -inset, dy: -inset)
+        if stars?.frame == frame { return }
+        stars?.removeFromSuperlayer()
+
+        // The effect belongs to the window overlay, outside the button and stack view clips.
+        let field = CALayer()
+        field.name = "metal-stars"
+        field.frame = frame
+        let card = CGRect(origin: CGPoint(x: inset, y: inset), size: bounds.size)
+        let cycle = 8.4
+        let duration = 2.75
+        let paths: [(origin: CGPoint, offset: CGPoint)] = [
+            (CGPoint(x: card.minX + card.width * 0.37, y: card.maxY), CGPoint(x: -9, y: 27)),
+            (CGPoint(x: card.maxX, y: card.minY + card.height * 0.71), CGPoint(x: 27, y: 7)),
+            (CGPoint(x: card.minX + card.width * 0.74, y: card.minY), CGPoint(x: 7, y: -24)),
+            (CGPoint(x: card.minX, y: card.minY + card.height * 0.31), CGPoint(x: -23, y: -8))
+        ]
+        let pixel: CGFloat = 2
+        let shape = CGMutablePath()
+        shape.addRect(CGRect(x: pixel, y: 0, width: pixel, height: pixel * 3))
+        shape.addRect(CGRect(x: 0, y: pixel, width: pixel * 3, height: pixel))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        host.addSublayer(field)
+        let start = field.convertTime(CACurrentMediaTime(), from: nil)
+        for (index, path) in paths.enumerated() {
+            let star = CAShapeLayer()
+            star.bounds = CGRect(x: 0, y: 0, width: pixel * 3, height: pixel * 3)
+            star.path = shape
+            star.fillColor = (index.isMultiple(of: 2) ? GalaxyTheme.cyan : NSColor.white).cgColor
+            star.position = path.origin
+            star.opacity = 0
+            field.addSublayer(star)
+
+            let move = CABasicAnimation(keyPath: "position")
+            move.fromValue = path.origin
+            move.toValue = CGPoint(x: path.origin.x + path.offset.x, y: path.origin.y + path.offset.y)
+            move.duration = duration
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0, 0.94, 0.70, 0]
+            fade.keyTimes = [0, 0.22, 0.64, 1]
+            fade.duration = duration
+            let drift = CAAnimationGroup()
+            drift.animations = [move, fade]
+            drift.beginTime = start + Double(index) * (cycle / Double(paths.count))
+            drift.duration = cycle
+            drift.repeatCount = .infinity
+            star.add(drift, forKey: "pixel-drift")
+        }
+        CATransaction.commit()
+        stars = field
     }
 }
 
@@ -136,13 +402,19 @@ final class LauncherBackgroundView: NSView {
                                 width: artwork.size.width, height: height)
             }
             artwork.draw(in: bounds, from: source, operation: .sourceOver, fraction: 1)
+            NSColor(calibratedWhite: 0.5, alpha: 0.29).setFill()
+            bounds.fill(using: .saturation)
         }
-        NSGradient(starting: GalaxyTheme.ink.withAlphaComponent(0.70),
-                   ending: GalaxyTheme.ink.withAlphaComponent(0.05))?.draw(in: bounds, angle: 0)
+        NSGradient(starting: GalaxyTheme.ink.withAlphaComponent(0.40),
+                   ending: GalaxyTheme.ink.withAlphaComponent(0.23))?.draw(in: bounds, angle: 90)
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
+    static let windowSize = NSSize(width: 1060, height: 662)
+    private static let newsRowHeight: CGFloat = 47
+    private enum HeaderPanel { case accounts, settings }
+    enum UpdatePhase: CaseIterable { case idle, checking, downloading, restarting }
     private let preferences: MCGLLauncherPreferences
     private let resourcesOverride: URL?
     private let supportRootOverride: URL?
@@ -211,12 +483,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     private var window: NSWindow!
     private var tabView: NSTabView!
-    private var navigationButtons: [GalaxyButton] = []
-    private var loginField: NSTextField!
+    private var pages: [Int: NSTabViewItem] = [:]
+    private var navigationButtons: [Int: GalaxyButton] = [:]
+    private var accountsPanel: NSVisualEffectView!
+    private var settingsPanel: NSVisualEffectView!
+    private var settingsButton: GalaxyButton!
+    private var openPanel: HeaderPanel?
+    private var panelEventMonitor: Any?
     private var passwordField: NSSecureTextField!
     private var rememberPasswordButton: NSButton!
     private var accountList: NSStackView!
-    private var accountSummary: MCGLAccountCard!
+    private var credentialsView: NSView!
+    private var profileButton: GalaxyContentButton!
+    private let profileArrow = NSImageView()
+    private let profileAvatar = NSImageView()
+    private let profileName = NSTextField(labelWithString: "")
+    private let profileSubtitle = NSTextField(labelWithString: "")
     private var accountCards: [UUID: MCGLAccountCard] = [:]
     private var accountEditingButtons: [NSButton] = []
     private var accountStatus: [UUID: String] = [:]
@@ -226,7 +508,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private var accountAttempts: [UUID: Date] = [:]
     private var accountCountLabel: NSTextField!
     private var fpsPopUp: NSPopUpButton!
+    private var metalVSyncButton: NSButton!
     private var launchButton: GalaxyButton!
+    private var newsRows: NSStackView!
+    private var newsItems: [MCGLProjectNews] = []
+    private var newsTask: URLSessionDataTask?
+    private var rendererButtons: [MCGLRenderer: GalaxyContentButton] = [:]
     private var launchState: MCGLLaunchState = .ready {
         didSet { refreshLaunchButton() }
     }
@@ -236,8 +523,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private var graphicsDiagnosticsButton: NSButton!
     private var chunkVboButton: NSButton!
     private var statusLabel: NSTextField!
-    private var updateButton: NSButton!
+    private var collapsedLaunchStatus: NSLayoutConstraint!
+    private var updateButton: GalaxyContentButton!
     private var updateStatusLabel: NSTextField!
+    private let updateTitle = NSTextField(labelWithString: "")
+    private let updateGlyph = NSImageView()
+    private let updateSpinner = NSProgressIndicator()
+    private let updateDownloadProgress = NSProgressIndicator()
+    private var installingLauncherUpdate = false
     private var logView: NSTextView!
     private var gameApplication: NSRunningApplication?
     private var installer: MCGLInstaller?
@@ -247,10 +540,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildWindow()
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(accessibilityDisplayChanged(_:)),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         appendLog("Minecraft Galaxy ARM64 Bootstrap \(MCGLLauncherUpdater.currentVersion) готов к запуску.")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         checkForLauncherUpdates(silent: true)
+        newsTask = MCGLProjectNews.fetch { [weak self] items in self?.showProjectNews(items) }
         if let selected = accounts.selected { queueAccountRefresh(selected.id) }
     }
 
@@ -258,11 +554,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         true
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        installingLauncherUpdate ? .terminateCancel : .terminateNow
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool { !installingLauncherUpdate }
+
+    func windowDidBecomeKey(_ notification: Notification) { updateMetalStars() }
+    func windowDidResignKey(_ notification: Notification) { updateMetalStars() }
+    func windowDidChangeOcclusionState(_ notification: Notification) { updateMetalStars() }
+    func windowDidResize(_ notification: Notification) {
+        guard window.isKeyWindow else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        updateMetalStars()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        closeHeaderPanel()
         if let gameApplication, !gameApplication.isTerminated {
             gameApplication.terminate()
         }
         cleanupTransport()
+        newsTask?.cancel()
         accountQueue.removeAll()
         accountRequestTokens.removeAll()
         accountRequests.values.forEach { $0.cancel() }
@@ -271,9 +584,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            contentRect: NSRect(origin: .zero, size: Self.windowSize),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
+        window.contentMinSize = NSSize(width: 960, height: 650)
         window.title = "Minecraft Galaxy — ARM64"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -287,146 +601,271 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         content.appearance = NSAppearance(named: .darkAqua)
         window.contentView = content
 
-        let sidebar = NSView()
-        sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = GalaxyTheme.ink.withAlphaComponent(0.94).cgColor
-        let divider = NSView()
-        divider.wantsLayer = true
-        divider.layer?.backgroundColor = GalaxyTheme.line.cgColor
         let icon = NSImageView()
-        // The sidebar uses the transparent mark, not the white Dock/Finder tile.
-        icon.identifier = NSUserInterfaceItemIdentifier("launcher-brand-symbol")
         icon.image = NSImage(contentsOf: resourcesRoot.appendingPathComponent("app-icon-symbol.png"))
         icon.imageScaling = .scaleProportionallyUpOrDown
-        let brand = label("GALAXY", size: 22, weight: .bold)
-        let brandDetail = label("APPLE SILICON", size: 10, weight: .medium, color: GalaxyTheme.muted)
-        brandDetail.attributedStringValue = NSAttributedString(
-            string: brandDetail.stringValue,
-            attributes: [.kern: 2, .font: brandDetail.font!, .foregroundColor: GalaxyTheme.muted])
-        let navigationTitle = label("ЛАУНЧЕР", size: 10, weight: .semibold, color: GalaxyTheme.muted)
-
+        icon.identifier = NSUserInterfaceItemIdentifier("launcher-brand-symbol")
         let unreadChanges = preferences.lastReadChangelogVersion != MCGLLauncherUpdater.currentVersion
-        let titles = ["Играть", "Аккаунты", "Настройки", "Журнал", unreadChanges ? "Изменения •" : "Изменения"]
-        let symbols = ["play.fill", "person.2.fill", "slider.horizontal.3", "text.alignleft", "sparkles"]
-        for index in 0..<titles.count {
-            let button = actionButton(titles[index], symbol: symbols[index],
-                                      action: #selector(selectPage(_:)), style: .navigation)
+        let pageTitles = [(0, "Главная"), (3, "Журнал"), (4, unreadChanges ? "Изменения •" : "Изменения")]
+        for (index, title) in pageTitles {
+            let button = actionButton(title, action: #selector(selectPage(_:)), style: .navigation)
             button.tag = index
             button.identifier = NSUserInterfaceItemIdentifier("page-\(index)")
+            button.setAccessibilityLabel(title)
+            button.toolTip = title
             button.keyEquivalent = "\(index + 1)"
             button.keyEquivalentModifierMask = [.command]
-            navigationButtons.append(button)
+            navigationButtons[index] = button
         }
-        let navigation = verticalStack(navigationButtons, spacing: 8)
-        let version = label("Версия \(MCGLLauncherUpdater.currentVersion)",
-                            size: 12, weight: .semibold)
-        let portLabel = label("Неофициальный ARM64-порт", size: 10, color: GalaxyTheme.muted)
-        let repositoryButton = actionButton("Проект на GitHub", symbol: "arrow.up.right",
-                                            action: #selector(openRepository))
-
-        updateButton = actionButton("Проверить обновления", symbol: "arrow.clockwise",
-                                     action: #selector(checkForLauncherUpdate))
-        updateStatusLabel = label("Проверка при запуске", size: 11, color: GalaxyTheme.muted)
-        updateStatusLabel.alignment = .right
+        let navigation = makeCardView(radius: 14)
+        let tabs = NSStackView(views: [0, 3, 4].compactMap { navigationButtons[$0] })
+        tabs.orientation = .horizontal
+        tabs.spacing = 2
+        tabs.distribution = .fillEqually
+        add([tabs], to: navigation)
+        let settings = actionButton("", symbol: "slider.horizontal.3", action: #selector(toggleSettings))
+        settings.identifier = NSUserInterfaceItemIdentifier("page-2")
+        settings.setAccessibilityLabel("Настройки")
+        settings.toolTip = "Настройки"
+        settings.keyEquivalent = "3"
+        settings.keyEquivalentModifierMask = [.command]
+        settingsButton = settings
+        let profile = makeProfileButton()
 
         tabView = NSTabView()
         tabView.tabViewType = .noTabsNoBorder
         tabView.drawsBackground = false
-        for (index, view) in [makePlayTab(), makeAccountsTab(), makeSettingsTab(), makeLogTab(), makeChangelogTab()].enumerated() {
-            let item = NSTabViewItem(identifier: ["play", "accounts", "settings", "log", "changes"][index])
-            item.label = titles[index]
+        for (index, identifier, view) in [(0, "play", makePlayTab()), (3, "log", makeLogTab()), (4, "changes", makeChangelogTab())] {
+            let item = NSTabViewItem(identifier: identifier)
+            item.label = navigationButtons[index]?.title ?? ""
             item.view = view
             tabView.addTabViewItem(item)
+            pages[index] = item
         }
-        statusLabel = NSTextField(wrappingLabelWithString: "Готов к запуску")
-        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        statusLabel.textColor = GalaxyTheme.cyan
-        statusLabel.maximumNumberOfLines = 2
-        statusLabel.identifier = NSUserInterfaceItemIdentifier("launch-status")
-        let statusLine = NSView()
-        statusLine.wantsLayer = true
-        statusLine.layer?.backgroundColor = GalaxyTheme.line.cgColor
-
-        add([sidebar, divider, updateButton, updateStatusLabel,
-             tabView, statusLine, statusLabel], to: content)
-        add([icon, brand, brandDetail, navigationTitle, navigation, version,
-             portLabel, repositoryButton], to: sidebar)
+        add([icon, navigation, profile, settings, tabView], to: content)
         NSLayoutConstraint.activate([
-            sidebar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            sidebar.topAnchor.constraint(equalTo: content.topAnchor),
-            sidebar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: 196),
-            divider.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            divider.widthAnchor.constraint(equalToConstant: 1),
-            divider.topAnchor.constraint(equalTo: content.topAnchor),
-            divider.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            icon.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 24),
-            icon.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 55),
-            icon.widthAnchor.constraint(equalToConstant: 68),
-            icon.heightAnchor.constraint(equalToConstant: 68),
-            brand.leadingAnchor.constraint(equalTo: icon.leadingAnchor, constant: 3),
-            brand.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 12),
-            brandDetail.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
-            brandDetail.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 4),
-            navigationTitle.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
-            navigationTitle.topAnchor.constraint(equalTo: brandDetail.bottomAnchor, constant: 44),
-            navigation.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 16),
-            navigation.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -16),
-            navigation.topAnchor.constraint(equalTo: navigationTitle.bottomAnchor, constant: 12),
-            version.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
-            version.bottomAnchor.constraint(equalTo: portLabel.topAnchor, constant: -6),
-            portLabel.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
-            portLabel.bottomAnchor.constraint(equalTo: repositoryButton.topAnchor, constant: -20),
-            repositoryButton.leadingAnchor.constraint(equalTo: navigation.leadingAnchor),
-            repositoryButton.trailingAnchor.constraint(equalTo: navigation.trailingAnchor),
-            repositoryButton.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -24),
-            repositoryButton.heightAnchor.constraint(equalToConstant: 36),
+            icon.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            icon.centerYAnchor.constraint(equalTo: navigation.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 42),
+            icon.heightAnchor.constraint(equalTo: icon.widthAnchor),
+            navigation.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 14),
+            navigation.topAnchor.constraint(equalTo: content.topAnchor, constant: 40),
+            navigation.widthAnchor.constraint(equalToConstant: 320),
+            navigation.heightAnchor.constraint(equalToConstant: 42),
+            tabs.leadingAnchor.constraint(equalTo: navigation.leadingAnchor, constant: 4),
+            tabs.trailingAnchor.constraint(equalTo: navigation.trailingAnchor, constant: -4),
+            tabs.topAnchor.constraint(equalTo: navigation.topAnchor, constant: 4),
+            tabs.bottomAnchor.constraint(equalTo: navigation.bottomAnchor, constant: -4),
+            settings.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            settings.centerYAnchor.constraint(equalTo: navigation.centerYAnchor),
+            settings.widthAnchor.constraint(equalToConstant: 44),
+            settings.heightAnchor.constraint(equalTo: navigation.heightAnchor),
+            profile.trailingAnchor.constraint(equalTo: settings.leadingAnchor, constant: -10),
+            profile.centerYAnchor.constraint(equalTo: navigation.centerYAnchor),
+            profile.widthAnchor.constraint(equalToConstant: 204),
+            profile.heightAnchor.constraint(equalTo: navigation.heightAnchor),
 
-            updateButton.topAnchor.constraint(equalTo: content.topAnchor, constant: 34),
-            updateButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -32),
-            updateButton.widthAnchor.constraint(equalToConstant: 196),
-            updateButton.heightAnchor.constraint(equalToConstant: 34),
-            updateStatusLabel.topAnchor.constraint(equalTo: updateButton.bottomAnchor, constant: 6),
-            updateStatusLabel.trailingAnchor.constraint(equalTo: updateButton.trailingAnchor),
-            updateStatusLabel.widthAnchor.constraint(equalToConstant: 320),
-            tabView.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 32),
-            tabView.trailingAnchor.constraint(equalTo: updateButton.trailingAnchor),
-            tabView.topAnchor.constraint(equalTo: content.topAnchor, constant: 110),
-            tabView.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -70),
-            statusLine.leadingAnchor.constraint(equalTo: tabView.leadingAnchor),
-            statusLine.trailingAnchor.constraint(equalTo: tabView.trailingAnchor),
-            statusLine.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -58),
-            statusLine.heightAnchor.constraint(equalToConstant: 1),
-            statusLabel.leadingAnchor.constraint(equalTo: tabView.leadingAnchor),
-            statusLabel.trailingAnchor.constraint(equalTo: tabView.trailingAnchor),
-            statusLabel.centerYAnchor.constraint(equalTo: content.bottomAnchor, constant: -30)
+            tabView.leadingAnchor.constraint(equalTo: icon.leadingAnchor),
+            tabView.trailingAnchor.constraint(equalTo: settings.trailingAnchor),
+            tabView.topAnchor.constraint(equalTo: navigation.bottomAnchor, constant: 22),
+            tabView.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24)
         ])
-        for button in navigationButtons {
-            button.widthAnchor.constraint(equalTo: navigation.widthAnchor).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 46).isActive = true
+        for button in tabs.arrangedSubviews {
+            button.heightAnchor.constraint(equalTo: tabs.heightAnchor).isActive = true
         }
+        let effects = GalaxyEffectsOverlay(frame: content.bounds)
+        effects.identifier = NSUserInterfaceItemIdentifier("launcher-effects")
+        effects.wantsLayer = true
+        effects.autoresizingMask = [.width, .height]
+        content.addSubview(effects, positioned: .above, relativeTo: tabView)
+        (rendererButtons[.metal] as? GalaxyMetalButton)?.effectsHost = effects
+        accountsPanel = makeHeaderPanel(makeAccountsPanel(), id: "header-accounts-panel",
+                                        anchor: profile, size: NSSize(width: 580, height: 500))
+        settingsPanel = makeHeaderPanel(makeSettingsPanel(), id: "header-settings-panel",
+                                        anchor: settings, size: NSSize(width: 502, height: 456))
         refreshMemoryControls()
         rebuildAccounts()
         showPage(0)
         restoreSelectedPassword()
-        window.initialFirstResponder = loginField.stringValue.isEmpty ? loginField : passwordField
+        window.initialFirstResponder = launchButton
     }
+
+    private func makeProfileButton() -> NSButton {
+        let button = GalaxyContentButton(title: "", target: self, action: #selector(toggleAccounts))
+        button.identifier = NSUserInterfaceItemIdentifier("header-profile")
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 13
+        button.layer?.borderWidth = 1
+        button.restingFill = GalaxyTheme.panel
+        button.refreshFeedback(animated: false)
+        button.toolTip = "Управление аккаунтами"
+        button.keyEquivalent = "2"
+        button.keyEquivalentModifierMask = [.command]
+        profileAvatar.wantsLayer = true
+        profileAvatar.layer?.cornerRadius = 8
+        profileAvatar.layer?.masksToBounds = true
+        profileAvatar.layer?.backgroundColor = GalaxyTheme.blue.withAlphaComponent(0.20).cgColor
+        profileAvatar.imageScaling = .scaleProportionallyUpOrDown
+        profileAvatar.contentTintColor = GalaxyTheme.cyan
+        profileName.font = .systemFont(ofSize: 13, weight: .semibold)
+        profileName.textColor = .white
+        profileName.lineBreakMode = .byTruncatingTail
+        profileSubtitle.font = .systemFont(ofSize: 10, weight: .medium)
+        profileSubtitle.textColor = GalaxyTheme.muted
+        profileSubtitle.lineBreakMode = .byTruncatingTail
+        let arrow = profileArrow
+        arrow.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
+        arrow.contentTintColor = GalaxyTheme.muted
+        add([profileAvatar, profileName, profileSubtitle, arrow], to: button)
+        NSLayoutConstraint.activate([
+            profileAvatar.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 9),
+            profileAvatar.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            profileAvatar.widthAnchor.constraint(equalToConstant: 30),
+            profileAvatar.heightAnchor.constraint(equalTo: profileAvatar.widthAnchor),
+            profileName.leadingAnchor.constraint(equalTo: profileAvatar.trailingAnchor, constant: 8),
+            profileName.trailingAnchor.constraint(equalTo: arrow.leadingAnchor, constant: -8),
+            profileName.topAnchor.constraint(equalTo: button.topAnchor, constant: 7),
+            profileSubtitle.leadingAnchor.constraint(equalTo: profileName.leadingAnchor),
+            profileSubtitle.trailingAnchor.constraint(equalTo: profileName.trailingAnchor),
+            profileSubtitle.topAnchor.constraint(equalTo: profileName.bottomAnchor, constant: 1),
+            arrow.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -11),
+            arrow.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            arrow.widthAnchor.constraint(equalToConstant: 11),
+            arrow.heightAnchor.constraint(equalToConstant: 11)
+        ])
+        profileButton = button
+        return button
+    }
+
+    private func makeHeaderPanel(_ body: NSView, id: String, anchor: NSView, size: NSSize) -> NSVisualEffectView {
+        let panel = NSVisualEffectView()
+        panel.identifier = NSUserInterfaceItemIdentifier(id)
+        panel.material = .popover
+        panel.blendingMode = .withinWindow
+        panel.state = .active
+        panel.wantsLayer = true
+        panel.layer?.cornerRadius = 16
+        panel.layer?.masksToBounds = true
+        panel.layer?.borderWidth = 1
+        panel.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        panel.isHidden = true
+        let tint = NSView()
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor(srgbRed: 0.078, green: 0.071, blue: 0.13, alpha: 0.93).cgColor
+        add([panel], to: window.contentView!)
+        add([tint], to: panel)
+        add([body], to: tint)
+        NSLayoutConstraint.activate([
+            panel.topAnchor.constraint(equalTo: anchor.bottomAnchor, constant: 9),
+            panel.trailingAnchor.constraint(equalTo: anchor.trailingAnchor),
+            panel.widthAnchor.constraint(equalToConstant: size.width),
+            panel.heightAnchor.constraint(equalToConstant: size.height),
+            tint.topAnchor.constraint(equalTo: panel.topAnchor),
+            tint.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            tint.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            body.topAnchor.constraint(equalTo: tint.topAnchor, constant: 16),
+            body.leadingAnchor.constraint(equalTo: tint.leadingAnchor, constant: 16),
+            body.trailingAnchor.constraint(equalTo: tint.trailingAnchor, constant: -16),
+            body.bottomAnchor.constraint(equalTo: tint.bottomAnchor, constant: -16)
+        ])
+        return panel
+    }
+
+    private func toggleHeaderPanel(_ kind: HeaderPanel) {
+        if openPanel == kind { closeHeaderPanel() }
+        else { showHeaderPanel(kind) }
+    }
+
+    private func showHeaderPanel(_ kind: HeaderPanel) {
+        guard openPanel != kind, window.attachedSheet == nil else { return }
+        closeHeaderPanel()
+        openPanel = kind
+        let panel = kind == .accounts ? accountsPanel! : settingsPanel!
+        panel.isHidden = false
+        profileButton.selectedAppearance = kind == .accounts
+        profileButton.setAccessibilityExpanded(kind == .accounts)
+        profileArrow.image = NSImage(systemSymbolName: kind == .accounts ? "chevron.up" : "chevron.down",
+                                     accessibilityDescription: nil)
+        settingsButton.selected = kind == .settings
+        settingsButton.setAccessibilityExpanded(kind == .settings)
+        refreshLaunchButton()
+        window.contentView?.layoutSubtreeIfNeeded()
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            let slide = CABasicAnimation(keyPath: "transform.translation.y")
+            slide.fromValue = 6
+            slide.toValue = 0
+            let reveal = CAAnimationGroup()
+            reveal.animations = [fade, slide]
+            reveal.duration = 0.18
+            reveal.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.layer?.add(reveal, forKey: "header-panel-reveal")
+        }
+        panelEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) {
+            [weak self, weak panel] event in
+            guard let self, let panel, event.window === self.window, self.window.attachedSheet == nil else { return event }
+            if event.type == .keyDown {
+                guard event.keyCode == 53 else { return event }
+                let button: NSButton = kind == .accounts ? self.profileButton : self.settingsButton
+                self.closeHeaderPanel()
+                self.window.makeFirstResponder(button)
+                return nil
+            }
+            let point = event.locationInWindow
+            if ![panel as NSView, self.profileButton, self.settingsButton].contains(where: {
+                $0.bounds.contains($0.convert(point, from: nil))
+            }) {
+                self.closeHeaderPanel()
+            }
+            return event
+        }
+        if kind == .accounts {
+            revealSelectedAccount()
+            accounts.accounts.forEach { queueAccountRefresh($0.id) }
+        }
+    }
+
+    private func closeHeaderPanel() {
+        guard openPanel != nil else { return }
+        window.makeFirstResponder(nil)
+        openPanel = nil
+        accountsPanel.isHidden = true
+        settingsPanel.isHidden = true
+        profileButton.selectedAppearance = false
+        profileButton.setAccessibilityExpanded(false)
+        profileArrow.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
+        settingsButton.selected = false
+        settingsButton.setAccessibilityExpanded(false)
+        if let panelEventMonitor { NSEvent.removeMonitor(panelEventMonitor) }
+        panelEventMonitor = nil
+        refreshLaunchButton()
+    }
+
+    @objc private func toggleAccounts() { toggleHeaderPanel(.accounts) }
+    @objc private func toggleSettings() { toggleHeaderPanel(.settings) }
 
     @objc private func selectPage(_ sender: NSButton) { showPage(sender.tag) }
 
     private func showPage(_ index: Int) {
-        guard (0..<tabView.numberOfTabViewItems).contains(index) else { return }
-        tabView.selectTabViewItem(at: index)
-        for button in navigationButtons {
+        guard let item = pages[index] else { return }
+        closeHeaderPanel()
+        if tabView.selectedTabViewItem !== item {
+            window.makeFirstResponder(nil)
+            tabView.selectTabViewItem(item)
+        }
+        for button in navigationButtons.values {
             button.selected = button.tag == index
             button.setAccessibilityValue(button.selected ? "Выбрано" : "")
         }
         refreshLaunchButton()
-        if index == 1 { accounts.accounts.forEach { queueAccountRefresh($0.id) } }
         if index == 4 {
             preferences.lastReadChangelogVersion = MCGLLauncherUpdater.currentVersion
-            navigationButtons[index].title = "Изменения"
-            navigationButtons[index].setAccessibilityLabel("Изменения")
+            navigationButtons[index]?.title = "Изменения"
+            navigationButtons[index]?.setAccessibilityLabel("Изменения")
         }
     }
 
@@ -436,13 +875,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         launchButton.setAccessibilityLabel(launchState.title)
         launchButton.symbol = launchState.symbol
         launchButton.style = launchState == .running ? .secondary : .primary
-        launchButton.isEnabled = launchState.isActionEnabled
+        launchButton.isEnabled = launchState.isActionEnabled && !installingLauncherUpdate
+        refreshRendererButtons()
         let isPlayPage = tabView.selectedTabViewItem?.identifier as? String == "play"
-        let acceptsReturn = isPlayPage && launchState.acceptsReturn
+        updateMetalStars()
+        let acceptsReturn = isPlayPage && openPanel == nil && launchState.acceptsReturn && !installingLauncherUpdate
         launchButton.keyEquivalent = acceptsReturn ? "\r" : ""
         window.defaultButtonCell = acceptsReturn ? launchButton.cell as? NSButtonCell : nil
         launchButton.needsDisplay = true
         refreshAccountControls()
+    }
+
+    @objc private func accessibilityDisplayChanged(_ notification: Notification) { updateMetalStars() }
+
+    private func updateMetalStars() {
+        guard let metal = rendererButtons[.metal] as? GalaxyMetalButton else { return }
+        metal.setStarsActive(metal.isEnabled && window.isKeyWindow && window.occlusionState.contains(.visible)
+                             && !window.isMiniaturized
+                             && openPanel == nil && tabView.selectedTabViewItem === pages[0]
+                             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 
 #if MCGL_LAUNCHER_TEST
@@ -450,114 +901,419 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func previewLaunchStateForTesting(_ state: MCGLLaunchState) {
         launchState = state
     }
+
+    func previewProjectNewsForTesting(_ items: [MCGLProjectNews]) {
+        showProjectNews(items)
+    }
+
+    func previewUpdatePhaseForTesting(_ phase: UpdatePhase) {
+        showUpdatePhase(phase, status: "Проверка при запуске")
+    }
+
+    func previewMetalStarsForTesting(_ active: Bool) {
+        (rendererButtons[.metal] as? GalaxyMetalButton)?.setStarsActive(active)
+    }
 #endif
 
     @objc private func openRepository() {
         NSWorkspace.shared.open(URL(string: "https://github.com/prilepv/mcgl-arm64")!)
     }
 
-    private func makeCardView() -> NSView {
+    private func makeCardView(radius: CGFloat = 16) -> NSView {
         let view = NSView()
         view.wantsLayer = true
         view.layer?.backgroundColor = GalaxyTheme.panel.cgColor
         view.layer?.borderColor = GalaxyTheme.line.cgColor
         view.layer?.borderWidth = 1
-        view.layer?.cornerRadius = 16
+        view.layer?.cornerRadius = radius
         return view
     }
 
     private func makePlayTab() -> NSView {
         let page = NSView()
-        let edition = label("НОВАЯ ОРБИТА  /  \(MCGLLauncherUpdater.currentVersion)",
-                            size: 10, weight: .semibold, color: GalaxyTheme.cyan)
-        let hero = label("Галактика\nначинается здесь.", size: 40, weight: .bold)
-        hero.maximumNumberOfLines = 2
-        let description = label("Твой Minecraft Galaxy. Нативно на Mac.",
-                                size: 13, color: GalaxyTheme.muted)
-        let card = makeCardView()
-        let welcome = label("Вход в игру", size: 19, weight: .semibold)
-        let loginLabel = label("Логин", size: 11, weight: .medium, color: GalaxyTheme.muted)
-        loginField = NSTextField()
-        loginField.placeholderString = "Логин MCGL"
-        loginField.identifier = NSUserInterfaceItemIdentifier("login")
-        loginField.stringValue = accounts.selected?.nickname ?? ""
-        loginField.delegate = self
-        styleField(loginField)
-        loginField.setAccessibilityLabel("Логин MCGL")
+        let rendererPanel = makeCardView(radius: 19)
+        let panelHeading = label("Режим графики", size: 15, weight: .semibold)
+        panelHeading.identifier = NSUserInterfaceItemIdentifier("renderer-heading")
+        let options = NSStackView(views: MCGLRenderer.allCases.map { makeRendererButton($0) })
+        options.orientation = .vertical
+        options.alignment = .leading
+        options.spacing = 8
+        add([panelHeading, options], to: rendererPanel)
+        for card in options.arrangedSubviews {
+            card.widthAnchor.constraint(equalTo: options.widthAnchor).isActive = true
+        }
 
-        let passwordLabel = label("Пароль", size: 11, weight: .medium, color: GalaxyTheme.muted)
-        passwordField = NSSecureTextField()
-        passwordField.placeholderString = "Пароль MCGL"
-        passwordField.target = self
-        passwordField.action = #selector(launchGame)
-        passwordField.identifier = NSUserInterfaceItemIdentifier("password")
-        passwordField.delegate = self
-        styleField(passwordField)
-        passwordField.setAccessibilityLabel("Пароль MCGL")
-        rememberPasswordButton = NSButton(checkboxWithTitle: "Сохранить пароль на этом Mac",
-                                         target: self, action: #selector(rememberPasswordChanged))
-        rememberPasswordButton.identifier = NSUserInterfaceItemIdentifier("remember-password")
-        styleCheckbox(rememberPasswordButton)
-        accountSummary = MCGLAccountCard(resources: resourcesRoot, compact: true)
-        accountSummary.identifier = NSUserInterfaceItemIdentifier("account-summary")
-
+        let edition = makeCardView(radius: 10)
+        let editionLabel = label("APPLE SILICON", size: 11, weight: .semibold, color: GalaxyTheme.cyan)
+        add([editionLabel], to: edition)
+        let hero = label("Minecraft Galaxy", size: 42, weight: .bold)
+        let description = label("Галактика на твоём Mac", size: 15, color: GalaxyTheme.muted)
         launchButton = actionButton("Запустить игру", symbol: "play.fill",
                                      action: #selector(toggleGame), style: .primary)
         launchButton.identifier = NSUserInterfaceItemIdentifier("launch")
-        let hint = label("Оставь лаунчер открытым, пока работает игра.",
-                         size: 10, color: GalaxyTheme.muted)
-        add([edition, hero, description, card, accountSummary], to: page)
-        add([welcome, loginLabel, loginField, passwordLabel, passwordField,
-             rememberPasswordButton, launchButton, hint], to: card)
+        let versionCard = makeCardView(radius: 12)
+        let versionCaption = label("ВЕРСИЯ ЛАУНЧЕРА", size: 9, weight: .medium, color: GalaxyTheme.muted)
+        let version = label(MCGLLauncherUpdater.currentVersion, size: 14, weight: .semibold)
+        add([versionCaption, version], to: versionCard)
+        statusLabel = NSTextField(wrappingLabelWithString: "")
+        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        statusLabel.textColor = GalaxyTheme.cyan
+        statusLabel.maximumNumberOfLines = 2
+        statusLabel.identifier = NSUserInterfaceItemIdentifier("launch-status")
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        collapsedLaunchStatus = statusLabel.heightAnchor.constraint(equalToConstant: 0)
+        setLaunchStatus("Готов к запуску")
+        let news = makeNewsPanel()
+        let launcherActions = makeLauncherActions()
+        add([rendererPanel, edition, hero, description, launchButton, versionCard, statusLabel, news, launcherActions], to: page)
         NSLayoutConstraint.activate([
-            edition.topAnchor.constraint(equalTo: page.topAnchor, constant: 4),
-            edition.leadingAnchor.constraint(equalTo: page.leadingAnchor),
-            hero.leadingAnchor.constraint(equalTo: page.leadingAnchor),
-            hero.topAnchor.constraint(equalTo: edition.bottomAnchor, constant: 10),
-            description.leadingAnchor.constraint(equalTo: page.leadingAnchor),
-            description.topAnchor.constraint(equalTo: hero.bottomAnchor, constant: 10),
-            card.leadingAnchor.constraint(equalTo: page.leadingAnchor),
-            card.topAnchor.constraint(equalTo: page.topAnchor, constant: 176),
-            card.widthAnchor.constraint(equalToConstant: 398),
-            card.bottomAnchor.constraint(equalTo: hint.bottomAnchor, constant: 24),
-            card.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor),
-            welcome.topAnchor.constraint(equalTo: card.topAnchor, constant: 21),
-            welcome.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 24),
-            loginLabel.topAnchor.constraint(equalTo: welcome.bottomAnchor, constant: 16),
-            loginLabel.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            loginField.topAnchor.constraint(equalTo: loginLabel.bottomAnchor, constant: 6),
-            loginField.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            loginField.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
-            loginField.heightAnchor.constraint(equalToConstant: 32),
-            passwordLabel.topAnchor.constraint(equalTo: loginField.bottomAnchor, constant: 12),
-            passwordLabel.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            passwordField.topAnchor.constraint(equalTo: passwordLabel.bottomAnchor, constant: 6),
-            passwordField.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            passwordField.trailingAnchor.constraint(equalTo: loginField.trailingAnchor),
-            passwordField.heightAnchor.constraint(equalToConstant: 32),
-            rememberPasswordButton.topAnchor.constraint(equalTo: passwordField.bottomAnchor, constant: 10),
-            rememberPasswordButton.leadingAnchor.constraint(equalTo: passwordField.leadingAnchor),
-            rememberPasswordButton.trailingAnchor.constraint(lessThanOrEqualTo: passwordField.trailingAnchor),
-            rememberPasswordButton.heightAnchor.constraint(equalToConstant: 22),
-            launchButton.topAnchor.constraint(equalTo: rememberPasswordButton.bottomAnchor, constant: 14),
-            launchButton.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            launchButton.trailingAnchor.constraint(equalTo: loginField.trailingAnchor),
-            launchButton.heightAnchor.constraint(equalToConstant: 42),
-            hint.topAnchor.constraint(equalTo: launchButton.bottomAnchor, constant: 10),
-            hint.leadingAnchor.constraint(equalTo: welcome.leadingAnchor),
-            hint.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -16),
-            accountSummary.leadingAnchor.constraint(equalTo: card.trailingAnchor, constant: 16),
-            accountSummary.trailingAnchor.constraint(equalTo: page.trailingAnchor),
-            accountSummary.topAnchor.constraint(equalTo: card.topAnchor),
-            accountSummary.heightAnchor.constraint(equalToConstant: 158)
+            rendererPanel.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            rendererPanel.topAnchor.constraint(equalTo: page.topAnchor, constant: 2),
+            rendererPanel.bottomAnchor.constraint(equalTo: options.bottomAnchor, constant: 12),
+            rendererPanel.widthAnchor.constraint(equalToConstant: 222),
+            panelHeading.leadingAnchor.constraint(equalTo: rendererPanel.leadingAnchor, constant: 17),
+            panelHeading.topAnchor.constraint(equalTo: rendererPanel.topAnchor, constant: 19),
+            options.topAnchor.constraint(equalTo: panelHeading.bottomAnchor, constant: 14),
+            options.leadingAnchor.constraint(equalTo: rendererPanel.leadingAnchor, constant: 10),
+            options.trailingAnchor.constraint(equalTo: rendererPanel.trailingAnchor, constant: -10),
+            edition.topAnchor.constraint(equalTo: page.topAnchor, constant: 13),
+            edition.leadingAnchor.constraint(equalTo: rendererPanel.trailingAnchor, constant: 30),
+            edition.heightAnchor.constraint(equalToConstant: 30),
+            editionLabel.centerYAnchor.constraint(equalTo: edition.centerYAnchor),
+            editionLabel.leadingAnchor.constraint(equalTo: edition.leadingAnchor, constant: 12),
+            editionLabel.trailingAnchor.constraint(equalTo: edition.trailingAnchor, constant: -12),
+            hero.leadingAnchor.constraint(equalTo: edition.leadingAnchor),
+            hero.topAnchor.constraint(equalTo: edition.bottomAnchor, constant: 16),
+            description.leadingAnchor.constraint(equalTo: edition.leadingAnchor),
+            description.topAnchor.constraint(equalTo: hero.bottomAnchor, constant: 9),
+            launchButton.leadingAnchor.constraint(equalTo: edition.leadingAnchor),
+            launchButton.topAnchor.constraint(equalTo: description.bottomAnchor, constant: 20),
+            launchButton.widthAnchor.constraint(equalToConstant: 192),
+            launchButton.heightAnchor.constraint(equalToConstant: 54),
+            versionCard.leadingAnchor.constraint(equalTo: launchButton.trailingAnchor, constant: 10),
+            versionCard.topAnchor.constraint(equalTo: launchButton.topAnchor),
+            versionCard.heightAnchor.constraint(equalTo: launchButton.heightAnchor),
+            versionCard.widthAnchor.constraint(equalToConstant: 142),
+            versionCaption.leadingAnchor.constraint(equalTo: versionCard.leadingAnchor, constant: 14),
+            versionCaption.topAnchor.constraint(equalTo: versionCard.topAnchor, constant: 10),
+            version.leadingAnchor.constraint(equalTo: versionCaption.leadingAnchor),
+            version.topAnchor.constraint(equalTo: versionCaption.bottomAnchor, constant: 3),
+            statusLabel.leadingAnchor.constraint(equalTo: launchButton.leadingAnchor),
+            statusLabel.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            statusLabel.topAnchor.constraint(equalTo: launchButton.bottomAnchor, constant: 8),
+            news.leadingAnchor.constraint(equalTo: edition.leadingAnchor),
+            news.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -1),
+            news.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 12),
+            news.bottomAnchor.constraint(equalTo: page.bottomAnchor),
+            launcherActions.leadingAnchor.constraint(equalTo: rendererPanel.leadingAnchor),
+            launcherActions.trailingAnchor.constraint(equalTo: rendererPanel.trailingAnchor),
+            launcherActions.bottomAnchor.constraint(equalTo: news.bottomAnchor)
         ])
         return page
     }
 
-    private func makeAccountsTab() -> NSView {
+    private func makeNewsPanel() -> NSView {
+        let panel = makeCardView(radius: 18)
+        panel.identifier = NSUserInterfaceItemIdentifier("project-news")
+        panel.layer?.backgroundColor = NSColor(srgbRed: 0.10, green: 0.085, blue: 0.17, alpha: 1).cgColor
+        panel.layer?.borderColor = GalaxyTheme.cyan.withAlphaComponent(0.20).cgColor
+        let tile = NSView()
+        tile.wantsLayer = true
+        tile.layer?.cornerRadius = 8
+        tile.layer?.backgroundColor = GalaxyTheme.cyan.withAlphaComponent(0.13).cgColor
+        let icon = NSImageView(image: NSImage(systemSymbolName: "newspaper", accessibilityDescription: nil)!)
+        icon.contentTintColor = GalaxyTheme.cyan
+        let heading = label("Новости проекта", size: 18, weight: .semibold)
+        let all = actionButton("Все новости", symbol: "arrow.up.right", action: #selector(openAllNews))
+        all.identifier = NSUserInterfaceItemIdentifier("all-project-news")
+        all.toolTip = "Открыть новости на официальном форуме MCGL"
+
+        let well = makeCardView(radius: 12)
+        well.layer?.backgroundColor = NSColor(srgbRed: 0.054, green: 0.045, blue: 0.099, alpha: 1).cgColor
+        well.layer?.borderColor = GalaxyTheme.cyan.withAlphaComponent(0.11).cgColor
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.contentView = VerticalLogClipView()
+        scroll.contentView.drawsBackground = false
+        let document = MCGLAccountsDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = document
+        newsRows = verticalStack([], spacing: 4)
+        newsRows.distribution = .fillEqually
+        let fitViewport = document.heightAnchor.constraint(equalTo: scroll.contentView.heightAnchor)
+        fitViewport.priority = .defaultHigh
+        add([tile, heading, all, well], to: panel)
+        add([scroll], to: well)
+        add([icon], to: tile)
+        add([newsRows], to: document)
+        NSLayoutConstraint.activate([
+            tile.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 14),
+            tile.centerYAnchor.constraint(equalTo: all.centerYAnchor),
+            tile.widthAnchor.constraint(equalToConstant: 30),
+            tile.heightAnchor.constraint(equalTo: tile.widthAnchor),
+            icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            icon.heightAnchor.constraint(equalTo: icon.widthAnchor),
+            heading.leadingAnchor.constraint(equalTo: tile.trailingAnchor, constant: 9),
+            heading.centerYAnchor.constraint(equalTo: all.centerYAnchor),
+            all.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -13),
+            all.topAnchor.constraint(equalTo: panel.topAnchor, constant: 10),
+            all.widthAnchor.constraint(equalToConstant: 127),
+            all.heightAnchor.constraint(equalToConstant: 32),
+            well.topAnchor.constraint(equalTo: all.bottomAnchor, constant: 8),
+            well.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 10),
+            well.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
+            well.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -10),
+            scroll.topAnchor.constraint(equalTo: well.topAnchor, constant: 5),
+            scroll.leadingAnchor.constraint(equalTo: well.leadingAnchor, constant: 5),
+            scroll.trailingAnchor.constraint(equalTo: well.trailingAnchor, constant: -5),
+            scroll.bottomAnchor.constraint(equalTo: well.bottomAnchor, constant: -5),
+            fitViewport,
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            newsRows.topAnchor.constraint(equalTo: document.topAnchor),
+            newsRows.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            newsRows.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            newsRows.bottomAnchor.constraint(equalTo: document.bottomAnchor)
+        ])
+        showNewsMessage("Загружаем новости MCGL…")
+        return panel
+    }
+
+    private func showNewsMessage(_ text: String) {
+        let row = NSView()
+        let message = label(text, size: 12, color: GalaxyTheme.muted)
+        message.alignment = .center
+        message.lineBreakMode = .byTruncatingTail
+        message.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        newsRows.addArrangedSubview(row)
+        add([message], to: row)
+        NSLayoutConstraint.activate([
+            row.widthAnchor.constraint(equalTo: newsRows.widthAnchor),
+            row.heightAnchor.constraint(greaterThanOrEqualToConstant: 29),
+            message.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8),
+            message.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8),
+            message.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+        ])
+    }
+
+    private func showProjectNews(_ items: [MCGLProjectNews]) {
+        newsItems = items
+        newsRows.arrangedSubviews.forEach { newsRows.removeArrangedSubview($0); $0.removeFromSuperview() }
+        if items.isEmpty {
+            showNewsMessage("Новости временно недоступны. Открыть ленту можно на форуме.")
+            return
+        }
+        for (index, item) in items.enumerated() {
+            let row = GalaxyContentButton(title: "", target: self, action: #selector(openNewsItem(_:)))
+            row.tag = index
+            row.identifier = NSUserInterfaceItemIdentifier("project-news-item-\(index)")
+            row.isBordered = false
+            row.wantsLayer = true
+            row.layer?.cornerRadius = 8
+            row.layer?.borderWidth = 1
+            row.restingFill = NSColor(srgbRed: 0.105, green: 0.09, blue: 0.16, alpha: 1)
+            row.restingBorder = NSColor.white.withAlphaComponent(0.055)
+            row.refreshFeedback(animated: false)
+            let title = item.title ?? formattedNewsDate(item.date)
+            row.setAccessibilityLabel([title, item.text].filter { !$0.isEmpty }.joined(separator: ". "))
+
+            let symbol = NSImageView()
+            symbol.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
+            symbol.contentTintColor = GalaxyTheme.cyan
+            let headline = label(title, size: item.title == nil ? 11 : 14, weight: .semibold,
+                                 color: item.title == nil ? GalaxyTheme.cyan : .white)
+            let summary = label(item.text, size: 12, color: GalaxyTheme.muted)
+            for field in [headline, summary] {
+                field.lineBreakMode = .byTruncatingTail
+                field.maximumNumberOfLines = 1
+                // Let the preview truncate before AppKit grows the window to fit it.
+                field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            }
+            let arrow = NSImageView()
+            arrow.image = NSImage(systemSymbolName: item.link == nil ? "chevron.right" : "arrow.up.right",
+                                  accessibilityDescription: nil)
+            arrow.contentTintColor = GalaxyTheme.muted
+            let text = verticalStack([headline, summary], spacing: 3)
+            add([symbol, text, arrow], to: row)
+            newsRows.addArrangedSubview(row)
+            NSLayoutConstraint.activate([
+                row.widthAnchor.constraint(equalTo: newsRows.widthAnchor),
+                row.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.newsRowHeight),
+                symbol.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 12),
+                symbol.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                symbol.widthAnchor.constraint(equalToConstant: 20),
+                symbol.heightAnchor.constraint(equalTo: symbol.widthAnchor),
+                text.leadingAnchor.constraint(equalTo: symbol.trailingAnchor, constant: 10),
+                text.trailingAnchor.constraint(equalTo: arrow.leadingAnchor, constant: -10),
+                text.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                headline.widthAnchor.constraint(equalTo: text.widthAnchor),
+                summary.widthAnchor.constraint(equalTo: text.widthAnchor),
+                arrow.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -11),
+                arrow.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                arrow.widthAnchor.constraint(equalToConstant: 10),
+                arrow.heightAnchor.constraint(equalTo: arrow.widthAnchor)
+            ])
+        }
+    }
+
+    private func formattedNewsDate(_ date: String?) -> String {
+        guard let date else { return "Объявление" }
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        guard let value = parser.date(from: date) else { return date }
+        let display = DateFormatter()
+        display.locale = Locale(identifier: "ru_RU")
+        display.dateFormat = "d MMMM yyyy"
+        return display.string(from: value)
+    }
+
+    @objc private func openAllNews() { NSWorkspace.shared.open(MCGLProjectNews.allNews) }
+
+    @objc private func openNewsItem(_ sender: NSButton) {
+        guard newsItems.indices.contains(sender.tag) else { return }
+        let item = newsItems[sender.tag]
+        if let link = item.link {
+            NSWorkspace.shared.open(link)
+            return
+        }
+        let alert = NSAlert()
+        alert.window.appearance = NSAppearance(named: .darkAqua)
+        alert.messageText = "Объявление MCGL · \(formattedNewsDate(item.date))"
+        alert.informativeText = item.text
+        alert.addButton(withTitle: "Закрыть")
+        alert.beginSheetModal(for: window)
+    }
+
+    private func makeRendererButton(_ renderer: MCGLRenderer) -> GalaxyContentButton {
+        let metal = renderer == .metal
+        let accent = metal ? GalaxyTheme.cyan : NSColor(srgbRed: 0.57, green: 0.83, blue: 0.87, alpha: 1)
+        let button: GalaxyContentButton = metal ? GalaxyMetalButton(frame: .zero) : GalaxyContentButton(frame: .zero)
+        button.title = ""
+        button.identifier = NSUserInterfaceItemIdentifier("renderer-\(renderer.rawValue)")
+        button.setAccessibilityLabel(renderer.title)
+        button.setButtonType(.pushOnPushOff)
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 12
+        button.layer?.borderWidth = 1
+        if metal {
+            let tint = GalaxyTheme.blue.blended(withFraction: 0.25, of: GalaxyTheme.cyan) ?? GalaxyTheme.blue
+            button.setGlowTint(tint, strength: 0.48)
+            button.restingBorder = tint.withAlphaComponent(0.42)
+        }
+        button.toolTip = metal ? "Нативная графика на Apple Silicon" : "Режим совместимости"
+        button.target = self
+        button.action = #selector(rendererChanged(_:))
+        rendererButtons[renderer] = button
+
+        let markTile = NSView()
+        markTile.wantsLayer = true
+        markTile.layer?.cornerRadius = 8
+        markTile.layer?.backgroundColor = accent.withAlphaComponent(0.12).cgColor
+        let mark = label(metal ? "M" : "GL", size: 12, color: accent)
+        mark.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        mark.identifier = NSUserInterfaceItemIdentifier("renderer-mark")
+        mark.setAccessibilityElement(false)
+        let title = label(renderer.title, size: 15, weight: .semibold)
+        let detail = label(metal ? "Для Apple Silicon" : "Совместимость", size: 11, color: GalaxyTheme.muted)
+        add([markTile, title, detail], to: button)
+        add([mark], to: markTile)
+        NSLayoutConstraint.activate([
+            button.heightAnchor.constraint(equalToConstant: 61),
+            markTile.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
+            markTile.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            markTile.widthAnchor.constraint(equalToConstant: 30),
+            markTile.heightAnchor.constraint(equalTo: markTile.widthAnchor),
+            mark.centerXAnchor.constraint(equalTo: markTile.centerXAnchor),
+            mark.centerYAnchor.constraint(equalTo: markTile.centerYAnchor),
+            title.leadingAnchor.constraint(equalTo: markTile.trailingAnchor, constant: 10),
+            title.topAnchor.constraint(equalTo: button.topAnchor, constant: 13),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4)
+        ])
+        let indicator = NSImageView()
+        indicator.identifier = NSUserInterfaceItemIdentifier("renderer-check")
+        indicator.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
+        indicator.contentTintColor = GalaxyTheme.cyan
+        add([indicator], to: button)
+        NSLayoutConstraint.activate([
+            indicator.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -10),
+            indicator.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            indicator.widthAnchor.constraint(equalToConstant: 14),
+            indicator.heightAnchor.constraint(equalTo: indicator.widthAnchor)
+        ])
+        if metal {
+            let badge = NSView()
+            badge.identifier = NSUserInterfaceItemIdentifier("renderer-new")
+            badge.wantsLayer = true
+            badge.layer?.cornerRadius = 6
+            badge.layer?.backgroundColor = NSColor(srgbRed: 0.75, green: 0.64, blue: 1, alpha: 1).cgColor
+            let text = label("NEW", size: 8, weight: .heavy, color: NSColor(srgbRed: 0.16, green: 0.09, blue: 0.32, alpha: 1))
+            add([badge], to: button)
+            add([text], to: badge)
+            NSLayoutConstraint.activate([
+                badge.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+                badge.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 6),
+                badge.widthAnchor.constraint(equalToConstant: 29),
+                badge.heightAnchor.constraint(equalToConstant: 14),
+                text.centerXAnchor.constraint(equalTo: badge.centerXAnchor),
+                text.centerYAnchor.constraint(equalTo: badge.centerYAnchor)
+            ])
+        }
+        return button
+    }
+
+    private var selectedRenderer: MCGLRenderer { hasMetalRenderer ? preferences.renderer : .openGL }
+    private var metalLibraryURL: URL { resourcesRoot.appendingPathComponent("libmcgl-metal-world-direct.dylib") }
+    private var bgfxLibraryURL: URL { resourcesRoot.appendingPathComponent("Bgfx/bgfx-window.dylib") }
+    private var hasMetalRenderer: Bool { FileManager.default.isReadableFile(atPath: metalLibraryURL.path) }
+
+    private func refreshRendererButtons() {
+        let available = hasMetalRenderer
+        let selected = available ? preferences.renderer : .openGL
+        let editable = launchState == .ready && !installingLauncherUpdate
+        metalVSyncButton.isEnabled = editable && available && FileManager.default.isReadableFile(atPath: bgfxLibraryURL.path)
+        for (renderer, button) in rendererButtons {
+            let supported = renderer != .metal || available
+            let active = renderer == selected
+            button.isEnabled = supported && editable
+            button.alphaValue = supported ? 1 : 0.45
+            button.state = active ? .on : .off
+            button.selectedAppearance = active
+            button.subviews.first { $0.identifier?.rawValue == "renderer-check" }?.isHidden = !active
+        }
+    }
+
+    @objc private func rendererChanged(_ sender: GalaxyContentButton) {
+        guard launchState == .ready, !installingLauncherUpdate,
+              let renderer = rendererButtons.first(where: { $0.value === sender })?.key,
+              renderer != .metal || hasMetalRenderer else { return }
+        preferences.renderer = renderer
+        refreshRendererButtons()
+    }
+
+    private func makeAccountsPanel() -> NSView {
         let page = NSView()
-        let heading = label("Твои аккаунты", size: 28, weight: .bold)
-        let caption = note("Основной персонаж и твинки — всё под рукой.")
+        let heading = label("Аккаунты", size: 21, weight: .semibold)
+        let caption = note("Выбери профиль, с которым хочешь запустить игру.")
+        let credentials = makeCardView(radius: 10)
+        credentialsView = credentials
+        let passwordCaption = label("Пароль MCGL", size: 11, weight: .semibold, color: GalaxyTheme.muted)
+        passwordCaption.lineBreakMode = .byTruncatingTail
+        passwordField = NSSecureTextField()
+        passwordField.identifier = NSUserInterfaceItemIdentifier("password")
+        passwordField.delegate = self
+        passwordField.setAccessibilityLabel("Пароль MCGL")
+        styleField(passwordField)
+        rememberPasswordButton = GalaxyInteractiveButton(checkboxWithTitle: "Сохранить пароль на этом Mac",
+                                         target: self, action: #selector(rememberPasswordChanged))
+        rememberPasswordButton.identifier = NSUserInterfaceItemIdentifier("remember-password")
+        styleCheckbox(rememberPasswordButton)
+        add([passwordCaption, passwordField, rememberPasswordButton], to: credentials)
         let addButton = actionButton("Добавить", symbol: "plus", action: #selector(addAccount), style: .primary)
         addButton.identifier = NSUserInterfaceItemIdentifier("account-add")
         accountEditingButtons = [addButton]
@@ -578,7 +1334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         document.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = document
         add([accountList], to: document)
-        let footer = note("Уровни и профессия загружаются с форума MCGL по нику. Сохранение пароля — по желанию, на этом Mac.")
+        let footer = note("Профессия и уровни загружаются с форума MCGL по нику.")
         add([heading, caption, addButton, refresh, accountCountLabel, scroll, footer], to: page)
         NSLayoutConstraint.activate([
             heading.topAnchor.constraint(equalTo: page.topAnchor, constant: 4),
@@ -588,7 +1344,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             addButton.trailingAnchor.constraint(equalTo: page.trailingAnchor),
             addButton.topAnchor.constraint(equalTo: heading.topAnchor),
             addButton.widthAnchor.constraint(equalToConstant: 130), addButton.heightAnchor.constraint(equalToConstant: 38),
-            refresh.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 16),
+            passwordCaption.leadingAnchor.constraint(equalTo: credentials.leadingAnchor, constant: 16),
+            passwordCaption.trailingAnchor.constraint(equalTo: credentials.trailingAnchor, constant: -16),
+            passwordCaption.topAnchor.constraint(equalTo: credentials.topAnchor, constant: 9),
+            passwordField.leadingAnchor.constraint(equalTo: passwordCaption.leadingAnchor),
+            passwordField.topAnchor.constraint(equalTo: passwordCaption.bottomAnchor, constant: 4),
+            passwordField.widthAnchor.constraint(equalToConstant: 222),
+            passwordField.heightAnchor.constraint(equalToConstant: 32),
+            rememberPasswordButton.leadingAnchor.constraint(equalTo: passwordField.trailingAnchor, constant: 14),
+            rememberPasswordButton.centerYAnchor.constraint(equalTo: passwordField.centerYAnchor),
+            rememberPasswordButton.trailingAnchor.constraint(lessThanOrEqualTo: credentials.trailingAnchor, constant: -16),
+            refresh.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 14),
             refresh.trailingAnchor.constraint(equalTo: page.trailingAnchor),
             refresh.widthAnchor.constraint(equalToConstant: 175), refresh.heightAnchor.constraint(equalToConstant: 32),
             accountCountLabel.leadingAnchor.constraint(equalTo: page.leadingAnchor),
@@ -611,6 +1377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     private func rebuildAccounts() {
         guard let accountList else { return }
+        credentialsView.removeFromSuperview()
         accountList.arrangedSubviews.forEach { accountList.removeArrangedSubview($0); $0.removeFromSuperview() }
         accountCards.removeAll()
         accountEditingButtons = accountEditingButtons.filter { $0.identifier?.rawValue == "account-add" }
@@ -652,7 +1419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             add([choose, rename, remove], to: card)
             NSLayoutConstraint.activate([
                 remove.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
-                remove.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -16),
+                remove.topAnchor.constraint(equalTo: card.topAnchor, constant: 103),
                 remove.widthAnchor.constraint(equalToConstant: 32), remove.heightAnchor.constraint(equalToConstant: 29),
                 rename.trailingAnchor.constraint(equalTo: remove.leadingAnchor, constant: -6),
                 rename.centerYAnchor.constraint(equalTo: remove.centerYAnchor),
@@ -662,6 +1429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 choose.widthAnchor.constraint(equalToConstant: 105), choose.heightAnchor.constraint(equalTo: remove.heightAnchor)
             ])
             card.reserveFooterSpace(before: choose)
+            if accounts.selected?.id == account.id { card.attachCredentials(credentialsView) }
             accountList.addArrangedSubview(card)
             card.widthAnchor.constraint(equalTo: accountList.widthAnchor).isActive = true
         }
@@ -675,9 +1443,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                                             status: accountStatusText(account))
         }
         let selected = accounts.selected
-        accountSummary?.update(account: selected, selected: selected != nil,
-                               status: selected.map(accountStatusText) ?? "Быстрый выбор из сохранённых логинов")
-        accountSummary?.isHidden = selected == nil
+        passwordField.setAccessibilityLabel(selected.map { "Пароль MCGL, \($0.nickname)" } ?? "Пароль MCGL")
+        passwordField.placeholderString = "Введи пароль"
+        profileName.stringValue = selected?.nickname ?? "Выбрать аккаунт"
+        profileSubtitle.stringValue = selected?.info?.professionTitle ?? "Аккаунт MCGL"
+        profileAvatar.image = selected?.info?.avatar.flatMap(MCGLAccountCard.thumbnail)
+            ?? NSImage(systemSymbolName: "person.fill", accessibilityDescription: nil)
+        profileButton?.setAccessibilityLabel("Аккаунт: \(profileName.stringValue)")
         accountCountLabel?.stringValue = "Сохранено: \(accounts.accounts.count) / 30"
     }
 
@@ -690,29 +1462,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     private func refreshAccountControls() {
-        let editable = launchState == .ready
-        loginField?.isEnabled = editable
-        passwordField?.isEnabled = editable
+        let editable = launchState == .ready && !installingLauncherUpdate
+        passwordField?.isEnabled = editable && accounts.selected != nil && accounts.loadError == nil
         rememberPasswordButton?.isEnabled = editable && accounts.selected != nil && accounts.loadError == nil
         rememberPasswordButton?.toolTip = accounts.selected == nil
-            ? "Для сохранения пароля добавь и выбери логин во вкладке «Аккаунты»."
+            ? "Для сохранения пароля добавь и выбери аккаунт."
             : "Без Связки ключей и мастер-пароля. Программа с доступом к твоим файлам сможет восстановить пароль."
         accountEditingButtons.forEach { $0.isEnabled = editable && accounts.loadError == nil }
     }
 
     private func applyAccountSelection() {
         passwordField.stringValue = ""
-        loginField.stringValue = accounts.selected?.nickname ?? ""
         rebuildAccounts()
+        setLaunchStatus("Готов к запуску")
         restoreSelectedPassword()
-        if let selected = accounts.selected { queueAccountRefresh(selected.id) }
+        if let selected = accounts.selected {
+            if openPanel == .accounts { revealSelectedAccount() }
+            queueAccountRefresh(selected.id)
+        }
+    }
+
+    private func revealSelectedAccount() {
+        guard let selected = accounts.selected, let card = accountCards[selected.id] else { return }
+        accountsPanel.layoutSubtreeIfNeeded()
+        card.scrollToVisible(card.bounds.insetBy(dx: 0, dy: -2))
     }
 
     @objc private func selectAccount(_ sender: NSButton) {
-        guard launchState == .ready, accounts.accounts.indices.contains(sender.tag) else { return }
+        guard accounts.accounts.indices.contains(sender.tag) else { return }
+        chooseAccount(accounts.accounts[sender.tag].id)
+    }
+
+    private func chooseAccount(_ id: UUID) {
+        guard launchState == .ready, !installingLauncherUpdate, accounts.loadError == nil else { return }
+        guard accounts.selected?.id != id else { return }
+        window.makeFirstResponder(nil)
         do {
             try persistSelectedPassword()
-            try accounts.select(accounts.accounts[sender.tag].id)
+            try accounts.select(id)
             applyAccountSelection()
         }
         catch { showError(error.localizedDescription) }
@@ -730,20 +1517,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         } catch {
             // Allow explicitly forgetting an unreadable record, but never silently reset it.
             rememberPasswordButton.state = .on
-            statusLabel.stringValue = "Сохранённый пароль недоступен. Можно убрать галочку и ввести его заново."
+            setLaunchStatus("Сохранённый пароль недоступен. Можно убрать галочку и ввести его заново.")
         }
     }
 
     private func persistSelectedPassword() throws {
         guard rememberPasswordButton.state == .on, preferences.localPasswordNoticeAccepted,
               let account = accounts.selected,
-              account.nickname.caseInsensitiveCompare(loginField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame,
               !passwordField.stringValue.isEmpty else { return }
         try passwordStore.save(passwordField.stringValue, for: account)
     }
 
     @objc private func rememberPasswordChanged() {
-        guard launchState == .ready, let account = accounts.selected else { return }
+        guard launchState == .ready, !installingLauncherUpdate, let account = accounts.selected else { return }
         if rememberPasswordButton.state == .off {
             do { try passwordStore.remove(for: account) }
             catch { rememberPasswordButton.state = .on; showError(error.localizedDescription) }
@@ -775,7 +1561,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     @objc private func addAccount() {
-        guard launchState == .ready else { return }
+        guard launchState == .ready, !installingLauncherUpdate else { return }
+        window.makeFirstResponder(nil)
         let alert = NSAlert()
         alert.messageText = "Добавить аккаунт"
         alert.window.appearance = NSAppearance(named: .darkAqua)
@@ -793,8 +1580,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         alert.accessoryView = accessory
         alert.window.initialFirstResponder = nick
         alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self, response == .alertFirstButtonReturn, self.launchState == .ready else { return }
+            guard let self, response == .alertFirstButtonReturn, self.launchState == .ready,
+                  !self.installingLauncherUpdate else { return }
             do {
+                try self.persistSelectedPassword()
                 try self.accounts.add(nickname: nick.stringValue, label: name.stringValue)
                 self.applyAccountSelection()
             } catch { self.showError(error.localizedDescription) }
@@ -894,8 +1683,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         refreshAccountCards()
     }
 
-    private func makeSettingsTab() -> NSView {
+    private func makeSettingsPanel() -> NSView {
         let page = NSView()
+        let heading = label("Настройки", size: 21, weight: .semibold)
         let memoryCard = makeCardView()
         let performanceCard = makeCardView()
         let memoryTitle = sectionLabel("Память игры")
@@ -917,10 +1707,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         memoryRow.orientation = .horizontal
         memoryRow.distribution = .fillEqually
         memoryRow.spacing = 24
-        let memoryHint = note("«При запуске» задаёт начальный объём памяти (Xms), «Максимум» — предел роста (Xmx). Для начала: 512 МБ / 2 ГБ.")
-        let memoryStack = verticalStack([memoryTitle, memoryRow, memoryHint], spacing: 16)
-        add([memoryCard, performanceCard], to: page)
-        pin(memoryStack, inside: memoryCard, inset: 24)
+        let memoryHint = note("Начальный объём (Xms) и предел роста (Xmx) для Java.")
+        let memoryStack = verticalStack([memoryTitle, memoryRow, memoryHint], spacing: 11)
+        add([heading, memoryCard, performanceCard], to: page)
+        pin(memoryStack, inside: memoryCard, inset: 16)
         memoryRow.widthAnchor.constraint(equalTo: memoryStack.widthAnchor).isActive = true
         memoryHint.widthAnchor.constraint(equalTo: memoryStack.widthAnchor).isActive = true
         for (popUp, container) in [(initialMemoryPopUp!, initial), (maximumMemoryPopUp!, maximum)] {
@@ -930,7 +1720,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
         let performanceTitle = sectionLabel("Графика и производительность")
         let fpsLabel = valueLabel("Лимит кадров")
-        fpsPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        fpsPopUp = GalaxyPopUpButton(frame: .zero, pullsDown: false)
+        fpsPopUp.wantsLayer = true
         fpsPopUp.controlSize = .large
         fpsPopUp.identifier = NSUserInterfaceItemIdentifier("fpsLimit")
         fpsPopUp.addItems(withTitles: MCGLLauncherPreferences.fpsLimits.map {
@@ -945,40 +1736,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         fpsRow.spacing = 24
         fpsPopUp.widthAnchor.constraint(equalToConstant: 212).isActive = true
         fpsPopUp.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        multicoreButton = NSButton(checkboxWithTitle: "Параллельная сборка мусора · G1GC",
+        metalVSyncButton = GalaxyInteractiveButton(checkboxWithTitle: "Вертикальная синхронизация (VSync) · только Metal",
+                                    target: self, action: #selector(metalVSyncChanged))
+        metalVSyncButton.identifier = NSUserInterfaceItemIdentifier("metalVSync")
+        metalVSyncButton.state = preferences.metalVSync ? .on : .off
+        metalVSyncButton.toolTip = "Синхронизирует вывод кадров Metal с экраном. Применяется при следующем запуске игры."
+        multicoreButton = GalaxyInteractiveButton(checkboxWithTitle: "Параллельная сборка мусора · G1GC",
                                    target: self, action: #selector(performanceOptionsChanged))
         multicoreButton.identifier = NSUserInterfaceItemIdentifier("multicoreMemory")
         multicoreButton.state = preferences.multicoreMemory ? .on : .off
         multicoreButton.toolTip = "Сборка мусора использует фоновые потоки; результат зависит от нагрузки."
-        graphicsDiagnosticsButton = NSButton(checkboxWithTitle: "Диагностика графики в журнале",
+        graphicsDiagnosticsButton = GalaxyInteractiveButton(checkboxWithTitle: "Диагностика графики в журнале",
                                              target: self, action: #selector(performanceOptionsChanged))
         graphicsDiagnosticsButton.identifier = NSUserInterfaceItemIdentifier("graphicsDiagnostics")
         graphicsDiagnosticsButton.state = preferences.graphicsDiagnostics ? .on : .off
         graphicsDiagnosticsButton.toolTip = "Техническая статистика каждые 5 секунд. Для обычной игры не требуется."
-        chunkVboButton = NSButton(checkboxWithTitle: "Core-отрисовка чанков · VBO / VAO (всегда включена)",
+        chunkVboButton = GalaxyInteractiveButton(checkboxWithTitle: "Core-отрисовка чанков · VBO / VAO (всегда включена)",
                                   target: self, action: #selector(performanceOptionsChanged))
         chunkVboButton.identifier = NSUserInterfaceItemIdentifier("chunkVbo")
         chunkVboButton.state = .on
         chunkVboButton.isEnabled = false
         chunkVboButton.toolTip = "В этой тестовой версии игра использует Core 4.1. Прежний переключатель VBO больше не меняет способ отрисовки."
-        for button in [multicoreButton!, graphicsDiagnosticsButton!, chunkVboButton!] {
+        for button in [metalVSyncButton!, multicoreButton!, graphicsDiagnosticsButton!, chunkVboButton!] {
             styleCheckbox(button)
         }
         let performanceStack = verticalStack(
-            [performanceTitle, fpsRow, multicoreButton, chunkVboButton, graphicsDiagnosticsButton], spacing: 18)
-        pin(performanceStack, inside: performanceCard, inset: 24)
-        let savedHint = note("Настройки сохраняются автоматически и применяются при следующем запуске игры.")
+            [performanceTitle, fpsRow, metalVSyncButton, multicoreButton, chunkVboButton, graphicsDiagnosticsButton], spacing: 10)
+        pin(performanceStack, inside: performanceCard, inset: 16)
+        let savedHint = note("Настройки сохраняются и применяются при следующем запуске игры.")
         add([savedHint], to: page)
         NSLayoutConstraint.activate([
-            memoryCard.topAnchor.constraint(equalTo: page.topAnchor),
+            heading.topAnchor.constraint(equalTo: page.topAnchor, constant: 4),
+            heading.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            memoryCard.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 14),
             memoryCard.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             memoryCard.trailingAnchor.constraint(equalTo: page.trailingAnchor),
-            memoryCard.bottomAnchor.constraint(equalTo: memoryStack.bottomAnchor, constant: 24),
-            performanceCard.topAnchor.constraint(equalTo: memoryCard.bottomAnchor, constant: 16),
+            memoryCard.bottomAnchor.constraint(equalTo: memoryStack.bottomAnchor, constant: 16),
+            performanceCard.topAnchor.constraint(equalTo: memoryCard.bottomAnchor, constant: 12),
             performanceCard.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             performanceCard.trailingAnchor.constraint(equalTo: page.trailingAnchor),
-            performanceCard.bottomAnchor.constraint(equalTo: performanceStack.bottomAnchor, constant: 24),
-            savedHint.topAnchor.constraint(equalTo: performanceCard.bottomAnchor, constant: 16),
+            performanceCard.bottomAnchor.constraint(equalTo: performanceStack.bottomAnchor, constant: 16),
+            savedHint.topAnchor.constraint(equalTo: performanceCard.bottomAnchor, constant: 12),
             savedHint.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             savedHint.trailingAnchor.constraint(equalTo: page.trailingAnchor),
             savedHint.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor)
@@ -986,7 +1784,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         return page
     }
 
+    private func makeLauncherActions() -> NSView {
+        let actions = NSView()
+        updateStatusLabel = note("Проверка при запуске")
+        updateStatusLabel.maximumNumberOfLines = 2
+        updateStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        updateButton = GalaxyContentButton(title: "", target: self, action: #selector(checkForLauncherUpdate))
+        updateButton.identifier = NSUserInterfaceItemIdentifier("launcher-update")
+        updateButton.isBordered = false
+        updateButton.wantsLayer = true
+        updateButton.layer?.cornerRadius = 10
+        updateButton.layer?.borderWidth = 1
+        updateButton.restingFill = GalaxyTheme.panel
+        updateTitle.font = .systemFont(ofSize: 12, weight: .semibold)
+        updateTitle.textColor = .white
+        updateTitle.lineBreakMode = .byTruncatingTail
+        updateTitle.setAccessibilityElement(false)
+        updateGlyph.contentTintColor = GalaxyTheme.cyan
+        updateSpinner.style = .spinning
+        updateSpinner.controlSize = .small
+        updateSpinner.isIndeterminate = true
+        updateSpinner.identifier = NSUserInterfaceItemIdentifier("launcher-check-spinner")
+        updateDownloadProgress.style = .bar
+        updateDownloadProgress.controlSize = .small
+        updateDownloadProgress.isIndeterminate = true
+        updateDownloadProgress.identifier = NSUserInterfaceItemIdentifier("launcher-download-progress")
+        let github = actionButton("GitHub", symbol: "arrow.up.right", action: #selector(openRepository))
+        github.identifier = NSUserInterfaceItemIdentifier("launcher-github")
+        github.toolTip = "Исходный код лаунчера на GitHub"
+        add([updateStatusLabel, updateButton, github], to: actions)
+        add([updateGlyph, updateTitle, updateSpinner, updateDownloadProgress], to: updateButton)
+        NSLayoutConstraint.activate([
+            updateStatusLabel.leadingAnchor.constraint(equalTo: actions.leadingAnchor, constant: 3),
+            updateStatusLabel.topAnchor.constraint(equalTo: actions.topAnchor),
+            updateStatusLabel.trailingAnchor.constraint(equalTo: actions.trailingAnchor, constant: -3),
+            updateButton.topAnchor.constraint(equalTo: updateStatusLabel.bottomAnchor, constant: 6),
+            updateButton.leadingAnchor.constraint(equalTo: actions.leadingAnchor),
+            updateButton.trailingAnchor.constraint(equalTo: github.leadingAnchor, constant: -8),
+            updateButton.bottomAnchor.constraint(equalTo: actions.bottomAnchor),
+            updateButton.heightAnchor.constraint(equalToConstant: 40),
+            github.trailingAnchor.constraint(equalTo: actions.trailingAnchor),
+            github.centerYAnchor.constraint(equalTo: updateButton.centerYAnchor),
+            github.widthAnchor.constraint(equalToConstant: 82),
+            github.heightAnchor.constraint(equalTo: updateButton.heightAnchor),
+            updateGlyph.leadingAnchor.constraint(equalTo: updateButton.leadingAnchor, constant: 10),
+            updateGlyph.centerYAnchor.constraint(equalTo: updateButton.centerYAnchor, constant: -1),
+            updateGlyph.widthAnchor.constraint(equalToConstant: 15),
+            updateGlyph.heightAnchor.constraint(equalTo: updateGlyph.widthAnchor),
+            updateSpinner.centerXAnchor.constraint(equalTo: updateGlyph.centerXAnchor),
+            updateSpinner.centerYAnchor.constraint(equalTo: updateGlyph.centerYAnchor),
+            updateSpinner.widthAnchor.constraint(equalTo: updateGlyph.widthAnchor),
+            updateSpinner.heightAnchor.constraint(equalTo: updateGlyph.heightAnchor),
+            updateTitle.leadingAnchor.constraint(equalTo: updateGlyph.trailingAnchor, constant: 7),
+            updateTitle.trailingAnchor.constraint(equalTo: updateButton.trailingAnchor, constant: -7),
+            updateTitle.centerYAnchor.constraint(equalTo: updateGlyph.centerYAnchor),
+            updateDownloadProgress.leadingAnchor.constraint(equalTo: updateButton.leadingAnchor, constant: 9),
+            updateDownloadProgress.trailingAnchor.constraint(equalTo: updateButton.trailingAnchor, constant: -9),
+            updateDownloadProgress.bottomAnchor.constraint(equalTo: updateButton.bottomAnchor, constant: -3),
+            updateDownloadProgress.heightAnchor.constraint(equalToConstant: 7)
+        ])
+        showUpdatePhase(.idle, status: "Проверка при запуске")
+        return actions
+    }
+
+    private func showUpdatePhase(_ phase: UpdatePhase, status: String, title: String? = nil) {
+        let symbol: String
+        let phaseTitle: String
+        switch phase {
+        case .idle: symbol = "arrow.clockwise"; phaseTitle = "Обновления"
+        case .checking: symbol = "arrow.clockwise"; phaseTitle = "Проверяем…"
+        case .downloading: symbol = "arrow.down"; phaseTitle = "Скачиваем…"
+        case .restarting: symbol = "arrow.clockwise"; phaseTitle = "Перезапуск…"
+        }
+        updateButton.isEnabled = phase == .idle
+        updateTitle.stringValue = title ?? phaseTitle
+        updateStatusLabel.stringValue = status
+        updateButton.toolTip = status
+        updateButton.setAccessibilityLabel(updateTitle.stringValue)
+        updateButton.setAccessibilityValue(status)
+        updateGlyph.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let spinning = animate && phase == .checking
+        let downloading = animate && phase == .downloading
+        updateGlyph.isHidden = spinning
+        if spinning { updateSpinner.startAnimation(nil) } else { updateSpinner.stopAnimation(nil) }
+        if downloading { updateDownloadProgress.startAnimation(nil) } else { updateDownloadProgress.stopAnimation(nil) }
+        updateSpinner.isHidden = !spinning
+        updateDownloadProgress.isHidden = !downloading
+    }
+
     private func styleCheckbox(_ button: NSButton) {
+        button.wantsLayer = true
         button.contentTintColor = GalaxyTheme.cyan
         button.font = .systemFont(ofSize: 13)
         // AppKit can retain a black cell title despite the dark appearance.
@@ -1199,6 +2087,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         button.style = style
         button.symbol = symbol
         button.isBordered = false
+        button.wantsLayer = true
         button.setAccessibilityLabel(title)
         return button
     }
@@ -1213,7 +2102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     private func memoryPopUp(values: [Int]) -> NSPopUpButton {
-        let popUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        let popUp = GalaxyPopUpButton(frame: .zero, pullsDown: false)
+        popUp.wantsLayer = true
         popUp.controlSize = .large
         popUp.addItems(withTitles: values.map { memoryTitle($0) })
         return popUp
@@ -1249,17 +2139,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         refreshMemoryControls()
     }
 
-    func controlTextDidChange(_ notification: Notification) {
-        if notification.object as? NSTextField === loginField {
-            passwordField.stringValue = ""
-            rememberPasswordButton.state = .off
-            if accounts.selected != nil {
-                try? accounts.select(nil)
-                rebuildAccounts()
-            }
-        }
-    }
-
     func controlTextDidEndEditing(_ notification: Notification) {
         guard launchState == .ready, notification.object as? NSTextField === passwordField else { return }
         do { try persistSelectedPassword() }
@@ -1270,6 +2149,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let index = fpsPopUp.indexOfSelectedItem
         preferences.fpsLimit = MCGLLauncherPreferences.fpsLimits.indices.contains(index)
             ? MCGLLauncherPreferences.fpsLimits[index] : 0
+    }
+
+    @objc private func metalVSyncChanged() {
+        preferences.metalVSync = metalVSyncButton.state == .on
     }
 
     @objc private func performanceOptionsChanged() {
@@ -1286,15 +2169,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     private func checkForLauncherUpdates(silent: Bool) {
-        updateButton.isEnabled = false
-        updateStatusLabel.stringValue = "GitHub: проверяем релизы…"
+        showUpdatePhase(.checking, status: "Проверяем обновления на GitHub")
         updater.check { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.updateButton.isEnabled = true
                 switch result {
                 case .success(.current):
-                    self.updateStatusLabel.stringValue = "Установлена актуальная версия"
+                    self.showUpdatePhase(.idle, status: "Установлена актуальная версия")
                     self.appendLog("Обновление лаунчера: установлена актуальная версия \(MCGLLauncherUpdater.currentVersion).")
                     if !silent {
                         let alert = NSAlert()
@@ -1304,12 +2185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                         alert.beginSheetModal(for: self.window)
                     }
                 case .success(.available(let release)):
-                    self.updateStatusLabel.stringValue = "Доступна версия \(release.version)"
-                    self.updateButton.title = "Скачать \(release.version)"
+                    self.showUpdatePhase(.idle, status: "Доступна версия \(release.version)", title: "Скачать \(release.version)")
                     self.appendLog("Доступно обновление лаунчера: \(release.version).")
                     self.offerLauncherUpdate(release)
                 case .failure(let error):
-                    self.updateStatusLabel.stringValue = "Не удалось проверить GitHub"
+                    self.showUpdatePhase(.idle, status: "Не удалось проверить GitHub")
                     self.appendLog("Проверка обновления лаунчера не удалась: \(error.localizedDescription)")
                     if !silent { self.showUpdateError(error.localizedDescription) }
                 }
@@ -1321,14 +2201,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let alert = NSAlert()
         alert.messageText = "Доступна версия \(release.version)"
         let notes = release.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        alert.informativeText = notes.isEmpty
-            ? "Можно скачать новый DMG с официальной страницы порта на GitHub."
-            : String(notes.prefix(700))
-        alert.addButton(withTitle: release.diskImage == nil ? "Открыть GitHub" : "Скачать DMG")
+        let automatic = release.installableDiskImage != nil
+            && MCGLPreparedLauncherUpdate.canReplace(Bundle.main.bundleURL)
+        let instructions = automatic
+            ? "Лаунчер скачает обновление и перезапустится. Профиль игры и аккаунты будут доступны после перезапуска."
+            : "Релиз можно установить вручную из DMG."
+        alert.informativeText = notes.isEmpty ? instructions : instructions + "\n\n" + String(notes.prefix(700))
+        let action = automatic ? "Обновить и перезапустить" : release.diskImage == nil ? "Открыть GitHub" : "Скачать DMG"
+        alert.addButton(withTitle: action)
         alert.addButton(withTitle: "Позже")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn, let self else { return }
-            if release.diskImage == nil {
+            if automatic {
+                self.installLauncherUpdate(release)
+            } else if release.diskImage == nil {
                 NSWorkspace.shared.open(release.pageURL)
             } else {
                 self.downloadLauncherUpdate(release)
@@ -1336,17 +2222,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
     }
 
+    private func installLauncherUpdate(_ release: MCGLGitHubRelease) {
+        let installed = Bundle.main.bundleURL
+        guard launchState == .ready, gameApplication == nil, !installingLauncherUpdate else {
+            showUpdateError("Заверши игру перед перезапуском лаунчера.")
+            return
+        }
+        if let id = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: {
+               $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+                   && $0.bundleURL?.standardizedFileURL == installed.standardizedFileURL
+           }) {
+            showUpdateError("Закрой другое окно этой копии лаунчера перед обновлением.")
+            return
+        }
+        do { try persistSelectedPassword() }
+        catch { showUpdateError(error.localizedDescription); return }
+        installingLauncherUpdate = true
+        showUpdatePhase(.downloading, status: "Загрузка версии \(release.version)…")
+        refreshLaunchButton()
+        updater.prepareInstallation(release, installed: installed) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else {
+                    if case .success(let update) = result { update.discard() }
+                    return
+                }
+                switch result {
+                case .failure(let error):
+                    self.finishLauncherUpdate(with: error)
+                case .success(let update):
+                    do { try update.install() }
+                    catch {
+                        update.discard()
+                        self.finishLauncherUpdate(with: error)
+                        return
+                    }
+                    self.showUpdatePhase(.restarting, status: "Обновление установлено")
+                    let configuration = NSWorkspace.OpenConfiguration()
+                    configuration.createsNewApplicationInstance = true
+                    NSWorkspace.shared.openApplication(at: installed, configuration: configuration) { app, error in
+                        DispatchQueue.main.async {
+                            let relaunched = error == nil && app?.isTerminated == false
+                            do {
+                                try update.finish(relaunched: relaunched)
+                                if relaunched {
+                                    self.installingLauncherUpdate = false
+                                    NSApp.terminate(nil)
+                                } else {
+                                    let failure = error ?? NSError(domain: "MinecraftGalaxyARM64.Updater", code: 2,
+                                        userInfo: [NSLocalizedDescriptionKey: "Новая версия не запустилась. Предыдущая версия восстановлена."])
+                                    self.finishLauncherUpdate(with: failure)
+                                }
+                            } catch {
+                                self.finishLauncherUpdate(with: error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func finishLauncherUpdate(with error: Error) {
+        installingLauncherUpdate = false
+        showUpdatePhase(.idle, status: "Ошибка обновления")
+        refreshLaunchButton()
+        appendLog("Не удалось обновить лаунчер: \(error.localizedDescription)")
+        showUpdateError(error.localizedDescription)
+    }
+
     private func downloadLauncherUpdate(_ release: MCGLGitHubRelease) {
-        updateButton.isEnabled = false
-        updateStatusLabel.stringValue = "Загрузка версии \(release.version)…"
+        showUpdatePhase(.downloading, status: "Загрузка версии \(release.version)…")
         appendLog("Загрузка DMG версии \(release.version) с GitHub…")
         updater.download(release) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.updateButton.isEnabled = true
                 switch result {
                 case .success(let diskImage):
-                    self.updateStatusLabel.stringValue = "DMG сохранён в «Загрузки»"
+                    self.showUpdatePhase(.idle, status: "DMG сохранён в «Загрузки»")
                     self.appendLog("Обновление загружено и проверено: \(diskImage.path)")
                     NSWorkspace.shared.open(diskImage)
                     let alert = NSAlert()
@@ -1355,7 +2308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                     alert.addButton(withTitle: "Понятно")
                     alert.beginSheetModal(for: self.window)
                 case .failure(let error):
-                    self.updateStatusLabel.stringValue = "Ошибка загрузки"
+                    self.showUpdatePhase(.idle, status: "Ошибка загрузки")
                     self.appendLog("Не удалось загрузить обновление: \(error.localizedDescription)")
                     self.showUpdateError(error.localizedDescription)
                 }
@@ -1386,16 +2339,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     @objc private func launchGame() {
-        guard launchState == .ready else { return }
+        guard launchState == .ready, !installingLauncherUpdate else { return }
         guard gameApplication == nil else {
             appendLog("Клиент уже запущен.")
             return
         }
 
-        let login = loginField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let account = accounts.selected else {
+            setLaunchStatus("Добавь или выбери аккаунт через кнопку справа вверху.")
+            showHeaderPanel(.accounts)
+            return
+        }
         let password = passwordField.stringValue
-        guard !login.isEmpty, !password.isEmpty else {
-            showError("Введи логин и пароль MCGL.")
+        guard !password.isEmpty else {
+            setLaunchStatus("Укажи пароль для \(account.nickname).")
+            showHeaderPanel(.accounts)
+            window.makeFirstResponder(passwordField)
             return
         }
 
@@ -1408,7 +2367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         do { try persistSelectedPassword() }
         catch { showError(error.localizedDescription); return }
 
-        prepareOfficialClientAndLaunch(login: login, password: password)
+        prepareOfficialClientAndLaunch(login: account.nickname, password: password)
     }
 
     private func prepareOfficialClientAndLaunch(login: String, password: String) {
@@ -1421,7 +2380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         appendLog(profileExists
             ? "Проверка обновлений официального клиента MCGL…"
             : "Первый запуск: оригинальные файлы будут загружены с официального зеркала MCGL.")
-        statusLabel.stringValue = profileExists ? "Проверка обновлений…" : "Подготовка загрузки…"
+        setLaunchStatus(profileExists ? "Проверка обновлений…" : "Подготовка загрузки…")
         launchState = .preparing
 
         let installer = MCGLInstaller(
@@ -1435,7 +2394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         installer.install(progress: { [weak self] message in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.statusLabel.stringValue = message
+                self.setLaunchStatus(message)
                 self.appendLog(message)
             }
         }, completion: { [weak self] result in
@@ -1501,8 +2460,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             return
         }
 
-        appendLog("Запуск Minecraft Galaxy в полностью нативном ARM64-режиме…")
-        statusLabel.stringValue = "Запуск клиента…"
+        let renderer = selectedRenderer
+        appendLog("Запуск Minecraft Galaxy ARM64 через \(renderer.title)…")
+        setLaunchStatus("Запуск клиента…")
         launchState = .launching
 
         let configuration = NSWorkspace.OpenConfiguration()
@@ -1521,6 +2481,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         runtimeEnvironment["MCGL_MULTICORE_MEMORY"] = multicoreEnabled ? "1" : "0"
         runtimeEnvironment["MCGL_GRAPHICS_DIAGNOSTICS"] = graphicsDiagnosticsEnabled ? "1" : "0"
         runtimeEnvironment["MCGL_FPS_LIMIT"] = String(fpsLimit)
+        runtimeEnvironment["MCGL_RENDERER"] = renderer.rawValue
+        for variable in ["MCGL_METAL_TERRAIN_LIBRARY", "MCGL_METAL_TERRAIN_VISIBLE", "MCGL_METAL_CAPTURE_FILE"] {
+            runtimeEnvironment.removeValue(forKey: variable)
+        }
+        runtimeEnvironment["MCGL_METAL_LIVE_LIBRARY"] = renderer == .metal ? metalLibraryURL.path : nil
+        runtimeEnvironment["MCGL_METAL_FULL_SCENE"] = renderer == .metal ? "1" : nil
+        let usesBgfx = renderer == .metal && FileManager.default.isReadableFile(atPath: bgfxLibraryURL.path)
+        let metalVSync = preferences.metalVSync
+        runtimeEnvironment["MCGL_BGFX_LIVE_LIBRARY"] = usesBgfx ? bgfxLibraryURL.path : nil
+        runtimeEnvironment["MCGL_METAL_VSYNC"] = usesBgfx ? (metalVSync ? "1" : "0") : nil
+        let usesIndependentMetal = usesBgfx && FileManager.default.isReadableFile(
+            atPath: resourcesRoot.appendingPathComponent("Bgfx/lwjgl.jar").path)
+        runtimeEnvironment["MCGL_METAL_INDEPENDENT"] = usesIndependentMetal ? "1" : nil
+        if usesIndependentMetal {
+            appendLog("Экспериментальный режим bgfx Metal без контекста OpenGL.")
+        } else if usesBgfx {
+            appendLog("Экспериментальный режим bgfx Metal в основном окне игры.")
+        }
+        if usesBgfx { appendLog(metalVSync ? "VSync в Metal включён." : "VSync в Metal выключен.") }
         configuration.environment = runtimeEnvironment
         configuration.activates = true
         configuration.createsNewApplicationInstance = true
@@ -1564,7 +2543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
                 self.gameApplication = application
                 self.launchState = .running
-                self.statusLabel.stringValue = "Игра запущена · остановить можно на вкладке «Играть»"
+                self.setLaunchStatus("Игра запущена · остановить можно на главной")
                 self.passwordField.stringValue = ""
                 self.appendLog("Игровое приложение запущено, PID: \(application.processIdentifier).")
                 self.appendLog("Пароль передан по одноразовому каналу; в журнал он не записан.")
@@ -1595,7 +2574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     @objc private func stopGame() {
         guard let application = gameApplication, !application.isTerminated else { return }
         launchState = .stopping
-        statusLabel.stringValue = "Остановка клиента…"
+        setLaunchStatus("Остановка клиента…")
         appendLog("Остановка клиента…")
         application.terminate()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak application] in
@@ -1694,7 +2673,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     private func resetLaunchControls(status: String) {
-        statusLabel.stringValue = status
+        setLaunchStatus(status)
         launchState = .ready
         if passwordField.stringValue.isEmpty { restoreSelectedPassword() }
         initialMemoryPopUp.isEnabled = true
@@ -1727,9 +2706,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     private func showError(_ message: String) {
-        statusLabel.stringValue = message
+        setLaunchStatus(message)
         appendLog("ОШИБКА: " + message)
         NSSound.beep()
+        if window.isVisible, window.attachedSheet == nil,
+           openPanel != nil || tabView.selectedTabViewItem !== pages[0] {
+            let alert = NSAlert()
+            alert.messageText = "Ошибка лаунчера"
+            alert.informativeText = message
+            alert.addButton(withTitle: "Закрыть")
+            alert.beginSheetModal(for: window)
+        }
+    }
+
+    private func setLaunchStatus(_ message: String) {
+        statusLabel.stringValue = message
+        let idle = message == "Готов к запуску"
+        statusLabel.isHidden = idle
+        collapsedLaunchStatus.isActive = idle
     }
 
     private func appendLog(_ message: String) {

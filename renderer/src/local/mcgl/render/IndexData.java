@@ -12,6 +12,12 @@ public final class IndexData {
     private final Type type;
     private final ByteBuffer bytes;
     private final int count, maximum;
+    private IndexData(Type type, int count, int maximum, ByteBuffer bytes) {
+        this.type = type;
+        this.count = count;
+        this.maximum = maximum;
+        this.bytes = bytes.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+    }
     private IndexData(Type type, int[] values) {
         this.type = type; this.count = values.length;
         int maximum = -1;
@@ -48,12 +54,31 @@ public final class IndexData {
     /** Each ordered convex quad becomes (0,1,2),(0,2,3); does not sort translucent faces. */
     public static IndexData quads(int vertexCount) {
         if (vertexCount < 0 || vertexCount % 4 != 0) throw new IllegalArgumentException("Quads require groups of four vertices");
-        int[] indices = new int[Math.multiplyExact(vertexCount / 4, 6)];
-        for (int v = 0, i = 0; v < vertexCount; v += 4) {
-            indices[i++] = v; indices[i++] = v + 1; indices[i++] = v + 2;
-            indices[i++] = v; indices[i++] = v + 2; indices[i++] = v + 3;
+        int count = Math.multiplyExact(vertexCount / 4, 6);
+        if (vertexCount <= 65536) {
+            ByteBuffer prefix = QuadIndices.SHORTS.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+            prefix.limit(count * Type.UINT16.bytes);
+            return new IndexData(Type.UINT16, count, vertexCount - 1, prefix.slice());
         }
-        return new IndexData(vertexCount <= 65536 ? Type.UINT16 : Type.UINT32, indices);
+        ByteBuffer data = ByteBuffer.allocateDirect(Math.multiplyExact(count, Type.UINT32.bytes)).order(ByteOrder.nativeOrder());
+        for (int v = 0; v < vertexCount; v += 4) {
+            data.putInt(v).putInt(v + 1).putInt(v + 2).putInt(v).putInt(v + 2).putInt(v + 3);
+        }
+        data.flip();
+        return new IndexData(Type.UINT32, count, vertexCount - 1, data);
+    }
+    /** Ordinary quad meshes use prefixes of the same immutable 192 KiB index sequence. */
+    private static final class QuadIndices {
+        static final ByteBuffer SHORTS = build();
+        private static ByteBuffer build() {
+            ByteBuffer data = ByteBuffer.allocateDirect(65536 / 4 * 6 * Type.UINT16.bytes).order(ByteOrder.nativeOrder());
+            for (int v = 0; v < 65536; v += 4) {
+                data.putShort((short)v).putShort((short)(v + 1)).putShort((short)(v + 2));
+                data.putShort((short)v).putShort((short)(v + 2)).putShort((short)(v + 3));
+            }
+            data.flip();
+            return data.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+        }
     }
     public Type type() { return type; }
     public int count() { return count; }

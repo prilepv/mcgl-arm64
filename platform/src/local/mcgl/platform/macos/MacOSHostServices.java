@@ -23,7 +23,8 @@ public final class MacOSHostServices implements HostServices {
         return MacOSMainThread.fullscreenState(cocoaWindow(window), reconcile);
     }
     @Override public void detachNativeFullscreen(long window) { MacOSMainThread.detachFullscreen(cocoaWindow(window)); }
-    @Override public String description() { return "macOS-main render=game-thread context-lock=CGL/nsgl-lock1 fullscreen=Spaces/native1"; }
+    @Override public String description() { return System.getProperty("mcgl.metal.windowpath") != null ? "macOS-main render=Metal fullscreen=Spaces/native1"
+            : "macOS-main render=game-thread context-lock=CGL/nsgl-lock1 fullscreen=Spaces/native1"; }
     @Override public boolean openURL(String url) {
         try { new ProcessBuilder("/usr/bin/open", url).start(); return true; }
         catch (java.io.IOException failed) { return false; }

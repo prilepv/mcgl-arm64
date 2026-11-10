@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 workspace_dir=${script_dir:h:h}
-version=1.7.5
+version=1.8.0
 dependency_root=${MCGL_BUILD_INPUTS:-$script_dir}
 output_root=${MCGL_RELEASE_OUTPUT_ROOT:-$workspace_dir/dist}
 release_name="Minecraft-Galaxy-ARM64-Bootstrap-${version}"
@@ -48,6 +48,7 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path /private/tmp/mcgl-swift-module-cache \
     -framework Cocoa -framework CryptoKit \
     "$script_dir/native-launcher/MCGLNativeLauncher.swift" \
+    "$script_dir/native-launcher/MCGLProjectNews.swift" \
     "$script_dir/native-launcher/MCGLLauncherPreferences.swift" \
     "$script_dir/native-launcher/MCGLAccounts.swift" \
     "$script_dir/native-launcher/MCGLPasswordStore.swift" \

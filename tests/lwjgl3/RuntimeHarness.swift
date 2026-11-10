@@ -24,7 +24,7 @@ process.arguments = ["BindingProbe", passwordFIFO, logFIFO, arguments[2]]
 var environment = ProcessInfo.processInfo.environment
 environment["MCGL_INITIAL_MEMORY_MB"] = "512"
 environment["MCGL_MEMORY_MB"] = "1024"
-environment["MCGL_FPS_LIMIT"] = "120"
+if environment["MCGL_FPS_LIMIT"] == nil { environment["MCGL_FPS_LIMIT"] = "120" }
 process.environment = environment
 try process.run()
 let synthetic = Array("unused-synthetic-test-input\n".utf8)

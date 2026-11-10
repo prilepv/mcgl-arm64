@@ -36,6 +36,16 @@ struct CaptureLauncherScreenshots {
         let delegate = AppDelegate(preferences: preferences, resourcesRoot: resources,
                                    accountService: NoPreviewNetwork(), passwordStore: MCGLPasswordStore(directory: vault))
         delegate.buildWindow()
+        delegate.previewProjectNewsForTesting([
+            .init(title: "Новости Project Galaxy", date: nil, text: "Обновления проекта и события на планетах.",
+                  link: MCGLProjectNews.allNews, symbol: "newspaper"),
+            .init(title: "События сообщества", date: nil, text: "Анонсы игровых событий и итоги конкурсов.",
+                  link: nil, symbol: "gift"),
+            .init(title: "Новости серверов", date: nil, text: "Объявления о работе планет.",
+                  link: nil, symbol: "megaphone"),
+            .init(title: "Жизнь Галактики", date: nil, text: "Публикации сообщества на форуме.",
+                  link: nil, symbol: "star")
+        ])
         let window = app.windows.first { $0.title == "Minecraft Galaxy — ARM64" }!
         let root = window.contentView!
         // Capture only our isolated window through WindowServer. NSView bitmap
@@ -47,7 +57,7 @@ struct CaptureLauncherScreenshots {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         for (index, name) in ["play", "accounts", "settings", "log", "changes"].enumerated() {
             let button = descendants(root).compactMap { $0 as? NSButton }
-                .first { $0.identifier?.rawValue == "page-\(index)" }!
+                .first { $0.identifier?.rawValue == (index == 1 ? "header-profile" : "page-\(index)") }!
             button.performClick(nil)
             if name == "log" {
                 let log = descendants(root).compactMap { $0 as? NSTextView }.first!

@@ -111,7 +111,9 @@ public final class GenerateGameBridge {
                 }
                 commands.append("    public ").append(result).append(' ').append(target).append('(').append(parameters).append(") { flushExternal(); ");
                 if(nativeName.equals("glFramebufferTexture2D"))commands.append("originalTextureRenderTarget(p3); ");
-                commands.append(returns).append("org.lwjgl.opengl.").append(nativeOwner).append('.').append(nativeName).append('(').append(arguments).append("); }\n");
+                String nativeArguments = nativeName.equals("glBindFramebuffer")
+                        ? "p0, MetalGameTarget.physicalFramebuffer(p1)" : arguments;
+                commands.append(returns).append("org.lwjgl.opengl.").append(nativeOwner).append('.').append(nativeName).append('(').append(nativeArguments).append("); }\n");
             }
             count++;
         }

@@ -37,6 +37,21 @@ public final class GameGeometryEquivalenceTest {
                 int vertices=mode==7?65540:mode==8?32772:32770;int[] words=new int[vertices*8];
                 compare(raw.invoke(null,words,words.length,vertices,mode,false,true,true,true,true,true),GameGeometry.raw(words,words.length,vertices,mode,false,true,true,true,true,true));
             }
+            int[] lastShortQuad = new int[65536 * 8];
+            compare(raw.invoke(null,lastShortQuad,lastShortQuad.length,65536,7,false,true,true,true,true,true),
+                    GameGeometry.raw(lastShortQuad,lastShortQuad.length,65536,7,false,true,true,true,true,true));
+            for (int word = 0; word < 5; word++) {
+                int[] quad = new int[32];
+                quad[24 + word] = Float.floatToRawIntBits(Float.NaN);
+                for (boolean textured : new boolean[]{false, true}) {
+                    try {
+                        GameGeometry.raw(quad,32,4,7,false,true,false,textured,false,false);
+                        check(word >= 3 && !textured, "non-finite active quad attribute accepted");
+                    } catch (IllegalArgumentException expected) {
+                        check(word < 3 || textured, "inactive quad UV must preserve its bytes");
+                    }
+                }
+            }
             ByteOrder opposite=ByteOrder.nativeOrder()==ByteOrder.BIG_ENDIAN?ByteOrder.LITTLE_ENDIAN:ByteOrder.BIG_ENDIAN;
             for(ByteBuffer bad:new ByteBuffer[]{ByteBuffer.allocateDirect(60).order(opposite),ByteBuffer.allocate(60).order(ByteOrder.nativeOrder()),ByteBuffer.allocateDirect(59).order(ByteOrder.nativeOrder())}) {
                 boolean oldRejected=false,newRejected=false;

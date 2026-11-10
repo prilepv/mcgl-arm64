@@ -31,25 +31,27 @@ struct AccountsLayoutTest {
         delegate.buildWindow()
         let window = app.windows.first { $0.title == "Minecraft Galaxy — ARM64" }!
         let root = window.contentView!
-        let accountButton = descendants(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "page-1" }!
+        let accountButton = descendants(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "header-profile" }!
         accountButton.performClick(nil)
         root.layoutSubtreeIfNeeded()
         let scroll = descendants(root).compactMap { $0 as? NSScrollView }.first { $0.identifier?.rawValue == "account-scroll" }!
         let document = scroll.documentView!
         let cards = descendants(document).compactMap { $0 as? MCGLAccountCard }
         precondition(cards.count == 30)
+        precondition(descendants(document).filter { $0 is NSSecureTextField }.count == 1)
         precondition(document.frame.height > 4500 && scroll.contentView.bounds.height > 300,
                      "Account scroll document did not expand: \(document.frame), \(scroll.contentView.bounds)")
         precondition(!scroll.contentView.drawsBackground)
         for card in cards {
-            precondition(card.frame.height == 148 && card.frame.width > 700)
+            let password = descendants(card).compactMap { $0 as? NSSecureTextField }.first
+            let expectedHeight: CGFloat = password == nil ? 148 : 222
+            precondition(card.frame.height == expectedHeight && card.frame.width > 500)
             precondition(!card.hasAmbiguousLayout)
             let footer = descendants(card).first { $0.identifier?.rawValue == "account-freshness" }!
-            let actions = descendants(card).compactMap { $0 as? NSButton }
-            for action in actions {
-                precondition(!card.convert(footer.bounds, from: footer).intersects(card.convert(action.bounds, from: action)),
+            let actions = descendants(card).compactMap { $0 as? GalaxyButton }
+            for button in actions {
+                precondition(!card.convert(footer.bounds, from: footer).intersects(card.convert(button.bounds, from: button)),
                              "Account timestamp overlaps its action buttons")
-                let button = action as! GalaxyButton
                 let textSize = NSAttributedString(string: button.title, attributes: [
                     .font: NSFont.systemFont(ofSize: 13, weight: .semibold)
                 ]).size()

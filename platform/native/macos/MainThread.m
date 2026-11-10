@@ -1,6 +1,8 @@
 #include <jni.h>
 #import <Cocoa/Cocoa.h>
+#ifndef MCGL_METAL_WINDOW_ONLY
 #import <OpenGL/OpenGL.h>
+#endif
 #import <objc/runtime.h>
 
 // AppKit owns the Space, animation and saved window rectangle. Keep GLFW's
@@ -115,6 +117,7 @@ Java_local_mcgl_platform_macos_MacOSMainThread_detachFullscreen(JNIEnv *environm
 
 // The owner holds this between frame boundaries. GLFW's Cocoa update paths
 // acquire the same CGL lock. Never hold it while waiting for the AppKit thread.
+#ifndef MCGL_METAL_WINDOW_ONLY
 static _Thread_local CGLContextObj mcgl_render_context;
 
 JNIEXPORT void JNICALL
@@ -144,6 +147,8 @@ Java_local_mcgl_platform_macos_MacOSMainThread_isContextLocked(JNIEnv *environme
     (void)environment; (void)type;
     return mcgl_render_context != NULL ? JNI_TRUE : JNI_FALSE;
 }
+
+#endif
 
 @interface MCGLMainThreadTask : NSObject {
 @public
@@ -206,16 +211,20 @@ Java_local_mcgl_platform_macos_MacOSMainThread_invoke(JNIEnv *environment, jclas
     task->action = (*environment)->NewGlobalRef(environment, action);
     task->run = run;
     if (task->action != NULL) {
+#ifndef MCGL_METAL_WINDOW_ONLY
         CGLContextObj released_context = mcgl_render_context;
         if (released_context != NULL) {
             CGLUnlockContext(released_context);
             mcgl_render_context = NULL;
         }
+#endif
         [task performSelectorOnMainThread:@selector(execute) withObject:nil waitUntilDone:YES];
+#ifndef MCGL_METAL_WINDOW_ONLY
         if (released_context != NULL) {
             CGLLockContext(released_context);
             mcgl_render_context = released_context;
         }
+#endif
         (*environment)->DeleteGlobalRef(environment, task->action);
         if (!task->executed) {
             jclass error = (*environment)->FindClass(environment, "java/lang/IllegalStateException");

@@ -20,7 +20,7 @@ final class MCGLInstaller {
     private var activeCompatibilityPack: (pack: URL, official: URL)?
     // Separate from launcher version. LWJGL 3 requires fresh original JARs
     // before the existing game transforms and the final binding-only adapter.
-    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17\n"
+    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-5\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,
         URL(string: "http://f3.mcgl.ru/mclient/")!,
@@ -259,7 +259,13 @@ final class MCGLInstaller {
     func adoptPreviouslyPreparedClient() throws {
         guard !fileManager.fileExists(atPath: savedReceiptURL.path),
               let marker = try? String(contentsOf: gameDirectoryURL.appendingPathComponent(".arm64-port-version"), encoding: .utf8),
-              [portMarker, "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-16\n"].contains(marker),
+              [portMarker, "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-4\n",
+               "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-3\n",
+               "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-2\n",
+               "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-1\n",
+               "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-matrix-1\n",
+               "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17\n",
+               "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-16\n"].contains(marker),
               let data = try? Data(contentsOf: gameDirectoryURL.appendingPathComponent("update_f.lst")) else { return }
         let known: Set<String> = ["7a9a3f2b6853ae84f7a246059767cbee", "1ef465d610a107259ac7e3b23df9afd3", "93732530647cb0cbb1044aabc2ee4bb1"]
         guard let client = try parseManifest(data).first(where: { $0.path == "bin/mcgl.jar" }), known.contains(client.md5) else { return }

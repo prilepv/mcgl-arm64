@@ -1,6 +1,7 @@
 package local.mcgl.platform.glfw;
 
 import local.mcgl.platform.*;
+import local.mcgl.render.backend.MetalGameTarget;
 import org.lwjgl.glfw.*;
 import org.lwjgl.system.Configuration;
 import static org.lwjgl.glfw.GLFW.*;
@@ -22,6 +23,7 @@ public final class GlfwWindow implements WindowBackend {
     private Thread contextOwner;
     private int nativeFullscreenState;
     private boolean nativeFullscreenAttached;
+    private MetalGameTarget metal;
 
     public GlfwWindow(HostServices host) {
         if (host == null) throw new NullPointerException("host");
@@ -137,10 +139,12 @@ public final class GlfwWindow implements WindowBackend {
         if (request.coreProfile && request.major < 3)
             throw new IllegalArgumentException("Core profiles require OpenGL 3.2 or later");
         initialize();
+        boolean useMetal = "metal".equals(System.getenv("MCGL_RENDERER"));
+        if (useMetal && !request.coreProfile) throw new IllegalStateException("Metal requires the migrated game renderer");
         try {
             host.invoke(() -> {
                 glfwDefaultWindowHints();
-                glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+                glfwWindowHint(GLFW_CLIENT_API, useMetal ? GLFW_NO_API : GLFW_OPENGL_API);
                 glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, request.major);
                 glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, request.minor);
                 glfwWindowHint(GLFW_OPENGL_PROFILE, request.coreProfile ? GLFW_OPENGL_CORE_PROFILE : GLFW_OPENGL_ANY_PROFILE);
@@ -157,11 +161,19 @@ public final class GlfwWindow implements WindowBackend {
                 glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
                 window = glfwCreateWindow(width, height, title,
                         fullscreen && !host.usesNativeFullscreen() ? glfwGetPrimaryMonitor() : 0, 0);
-                if (window == 0) throw new IllegalStateException("GLFW could not create the requested OpenGL window");
+                if (window == 0) throw new IllegalStateException("GLFW could not create the requested game window");
+                if (useMetal) {
+                    if (glfwGetWindowAttrib(window, GLFW_CLIENT_API) != GLFW_NO_API)
+                        throw new IllegalStateException("The Metal game window unexpectedly has a GL context");
+                    metal = new MetalGameTarget(GLFWNativeCocoa.glfwGetCocoaWindow(window));
+                    System.setProperty("mcgl.window.backend", "Cocoa/Metal");
+                    System.out.println("[MCGL Metal] one Cocoa window; GLFW_NO_API"
+                            + (metal.usesOpenGL() ? "; offscreen Core source" : "; bgfx game source"));
+                }
                 if (host.usesNativeFullscreen()) {
                     host.attachNativeFullscreen(window); nativeFullscreenAttached = true;
                 }
-                if (request.coreProfile) {
+                if (request.coreProfile && !useMetal) {
                     int actualMajor = glfwGetWindowAttrib(window, GLFW_CONTEXT_VERSION_MAJOR);
                     int actualMinor = glfwGetWindowAttrib(window, GLFW_CONTEXT_VERSION_MINOR);
                     if (actualMajor < request.major || (actualMajor == request.major && actualMinor < request.minor)
@@ -227,6 +239,7 @@ public final class GlfwWindow implements WindowBackend {
     @Override public void destroy() {
         if (!isCreated()) return;
         releaseContext();
+        if (metal != null) { metal.close(); metal = null; }
         host.invoke(() -> {
             if (nativeFullscreenAttached) {
                 host.detachNativeFullscreen(nativeHandle()); nativeFullscreenAttached = false;
@@ -251,6 +264,11 @@ public final class GlfwWindow implements WindowBackend {
     }
     @Override public synchronized void makeCurrent() {
         requireOwnerOrUnbound();
+        if (metal != null) {
+            metal.makeCurrent();
+            contextOwner = Thread.currentThread();
+            return;
+        }
         long handle = nativeHandle();
         glfwMakeContextCurrent(handle);
         if (glfwGetCurrentContext() != handle) throw new IllegalStateException("Could not make the window context current");
@@ -266,6 +284,11 @@ public final class GlfwWindow implements WindowBackend {
     @Override public synchronized void releaseContext() {
         requireOwnerOrUnbound();
         if (contextOwner == null) return;
+        if (metal != null) {
+            metal.release();
+            contextOwner = null;
+            return;
+        }
         host.unlockContext();
         glfwMakeContextCurrent(0);
         contextOwner = null;
@@ -279,14 +302,20 @@ public final class GlfwWindow implements WindowBackend {
         if (contextOwner != Thread.currentThread() || !isCurrent())
             throw new IllegalStateException("No current window context on this thread");
     }
-    @Override public boolean isCurrent() { return isCreated() && glfwGetCurrentContext() == window; }
-    @Override public void swapBuffers() { requireCurrent(); glfwSwapBuffers(nativeHandle()); }
+    @Override public boolean isCurrent() { return isCreated() && (metal != null ? metal.isCurrent() : glfwGetCurrentContext() == window); }
+    @Override public void prepareFrame() { if (metal != null) metal.prepare(framebufferWidth, framebufferHeight); }
+    @Override public void swapBuffers() {
+        requireCurrent();
+        if (metal == null) glfwSwapBuffers(nativeHandle());
+        else if (metal.usesOpenGL()) org.lwjgl.opengl.GL11C.glFlush();
+    }
     @Override public void setSwapInterval(int interval) {
-        if (isCreated()) { requireCurrent(); glfwSwapInterval(interval); }
+        if (isCreated()) { requireCurrent(); if (metal == null) glfwSwapInterval(interval); }
         swapInterval = interval;
     }
     @Override public void awaitWithoutContextLock(Runnable wait) {
         requireCurrent();
+        if (metal != null) { wait.run(); return; }
         host.unlockContext();
         try { wait.run(); } finally { host.lockContext(); }
     }

@@ -5,13 +5,13 @@
 <h1 align="center">Minecraft Galaxy ARM64</h1>
 
 <p align="center">
-  Неофициальный нативный порт для Apple Silicon · 1.7.5
-  <br>Java 21 · LWJGL 3 · OpenGL 4.1 Core · macOS Spaces
+  Неофициальный нативный порт для Apple Silicon · 1.8.0
+  <br>Java 21 · LWJGL 3 · Metal / OpenGL · macOS Spaces
 </p>
 
 <p align="center">
   <a href="https://github.com/prilepv/mcgl-arm64/releases/latest"><strong>Скачать для Mac</strong></a>
-  · <a href="docs/RELEASE-NOTES-1.7.5.md">Что нового</a>
+  · <a href="docs/RELEASE-NOTES-1.8.0.md">Что нового</a>
   · <a href="https://github.com/prilepv/mcgl-arm64/issues">Сообщить о проблеме</a>
 </p>
 
@@ -19,14 +19,16 @@ Minecraft Galaxy на Mac с Apple Silicon, без Rosetta и отдельной
 В проект входят нативный лаунчер, библиотеки совместимости и игровые патчи.
 Это неофициальный порт, не продукт разработчиков Minecraft или Minecraft Galaxy.
 
-![Лаунчер 1.7.5 — Играть](docs/screenshots/1.7.5/launcher-play.png)
+![Главная лаунчера Minecraft Galaxy ARM64 1.8.0](docs/screenshots/1.8.0/launcher-play.png)
 
-## 1.7.5 — исправление запуска
+## 1.8.0 — нативный Metal
 
-- Исправлен запуск игры после обновления официального клиента MCGL.
+- **Metal через bgfx** рисует игру без контекста OpenGL. В зависимости от сцены и настроек он может дать более высокий FPS. OpenGL доступен в меню «Режим графики».
+- Новый интерфейс с новостями MCGL и аметистовая иконка в лаунчере, Dock и Finder.
+- Последующие версии можно установить прямо из лаунчера.
+- Восстановлен запуск с актуальным официальным клиентом MCGL.
 
-[Описание выпуска 1.7.5](docs/RELEASE-NOTES-1.7.5.md).
-Для обновления замените приложение; профиль игры, аккаунты и настройки сохраняются.
+[Описание выпуска 1.8.0](docs/RELEASE-NOTES-1.8.0.md).
 
 ## 1.7.2 — оптимизация отрисовки
 
@@ -58,20 +60,20 @@ Minecraft Galaxy на Mac с Apple Silicon, без Rosetta и отдельной
 фиксированных значений или множителей не обещаем. Это проверенный этап
 модернизации, а не заявление о полном удалении всего legacy-кода.
 
-![Краткая история релизов в лаунчере](docs/screenshots/1.7.5/launcher-changes.png)
+![Краткая история релизов в лаунчере](docs/screenshots/1.8.0/launcher-changes.png)
 
 <details>
 <summary>Аккаунты, настройки и журнал</summary>
 
-![Менеджер аккаунтов](docs/screenshots/1.7.5/launcher-accounts.png)
-![Настройки](docs/screenshots/1.7.5/launcher-settings.png)
-![Журнал](docs/screenshots/1.7.5/launcher-log.png)
+![Менеджер аккаунтов](docs/screenshots/1.8.0/launcher-accounts.png)
+![Настройки](docs/screenshots/1.8.0/launcher-settings.png)
+![Журнал](docs/screenshots/1.8.0/launcher-log.png)
 
 </details>
 
 Скриншоты — настоящие страницы AppKit с вымышленными DemoMiner/DemoBuilder
-и тестовыми уровнями. Личных данных и игровой авторизации в них нет.
-[Все изображения](docs/screenshots/1.7.5/README.md).
+и демонстрационными новостями. Личных данных и игровой авторизации в них нет.
+[Все изображения](docs/screenshots/1.8.0/README.md).
 
 ## Скачать и запустить
 
@@ -91,15 +93,12 @@ Minecraft Galaxy на Mac с Apple Silicon, без Rosetta и отдельной
 
 ## Обновление с 1.6.x и 1.7.x
 
-В лаунчерах с проверкой обновлений нажмите **«Проверить обновления» → «Скачать DMG»**.
-После загрузки закройте игру и лаунчер, замените приложение в «Программах»
-и запустите 1.7.5. Установка остаётся ручной: приложение не перезаписывает себя.
+При переходе с 1.7.5 и более ранних версий скачайте DMG, закройте игру и
+лаунчер и замените приложение в «Программах». Начиная с 1.8.0, лаунчер может
+скачать следующую версию, проверить её, установить и перезапуститься.
 
-Аккаунты, настройки, сохранённые пароли и профиль игры находятся вне приложения
-и сохраняются. Установщик обновит игровые библиотеки и применит новый набор
-патчей; удалять профиль или отдельно ставить Java не нужно.
-Проверка обновлений в прежних версиях лаунчера обнаруживает 1.7.5
-и позволяет скачать новый DMG.
+Аккаунты, настройки, сохранённые пароли и профиль игры хранятся отдельно
+от приложения. Установщик обновит игровые библиотеки и патчи при запуске.
 
 Официальные файлы MCGL обновляются отдельно с зеркал игры. Обновления самого
 порта приходят из GitHub Releases с тегом `vX.Y.Z`; рядом с DMG есть SHA-256.
@@ -153,6 +152,6 @@ macOS, версию порта и шаги воспроизведения. Дл�
 Собственный код — [MIT](LICENSE), сторонние компоненты сохраняют свои лицензии.
 Minecraft и Minecraft Galaxy принадлежат соответствующим правообладателям.
 
-История: [1.7.5](docs/RELEASE-NOTES-1.7.5.md) · [1.7.4](docs/RELEASE-NOTES-1.7.4.md) · [1.7.3](docs/RELEASE-NOTES-1.7.3.md) · [1.7.2](docs/RELEASE-NOTES-1.7.2.md) · [1.7.1](docs/RELEASE-NOTES-1.7.1.md) · [1.7.0](docs/RELEASE-NOTES-1.7.0.md) · [1.6.7](docs/RELEASE-NOTES-1.6.7.md) ·
+История: [1.8.0](docs/RELEASE-NOTES-1.8.0.md) · [1.7.5](docs/RELEASE-NOTES-1.7.5.md) · [1.7.4](docs/RELEASE-NOTES-1.7.4.md) · [1.7.3](docs/RELEASE-NOTES-1.7.3.md) · [1.7.2](docs/RELEASE-NOTES-1.7.2.md) · [1.7.1](docs/RELEASE-NOTES-1.7.1.md) · [1.7.0](docs/RELEASE-NOTES-1.7.0.md) · [1.6.7](docs/RELEASE-NOTES-1.6.7.md) ·
 [1.6.6](docs/RELEASE-NOTES-1.6.6.md) · [1.6.5](docs/RELEASE-NOTES-1.6.5.md) ·
 [1.6.4](docs/RELEASE-NOTES-1.6.4.md).

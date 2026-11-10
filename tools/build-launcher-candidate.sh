@@ -25,6 +25,7 @@ build_tmp=$(mktemp -d /private/tmp/mcgl-launcher-candidate.XXXXXX)
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$build_tmp/modules" -framework Cocoa -framework CryptoKit \
     "$source_root/native-launcher/MCGLNativeLauncher.swift" \
+    "$source_root/native-launcher/MCGLProjectNews.swift" \
     "$source_root/native-launcher/MCGLLauncherPreferences.swift" \
     "$source_root/native-launcher/MCGLAccounts.swift" \
     "$source_root/native-launcher/MCGLPasswordStore.swift" \

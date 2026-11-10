@@ -2,11 +2,18 @@ package local.mcgl.render;
 
 import local.mcgl.render.backend.CompatibilityBackend;
 import local.mcgl.render.backend.Core41Backend;
+import local.mcgl.render.backend.BgfxGameBackend;
+import local.mcgl.render.backend.MetalGameTarget;
 
 /** Production composition root. Core contexts are explicitly requested, never a legacy fallback. */
 public final class RenderSystem {
-    private static final RenderDevice DEVICE = new RenderDevice((profile, forward) ->
-            profile == RenderProfile.CORE_41 ? new Core41Backend() : new CompatibilityBackend(forward));
+    private static final RenderDevice DEVICE = new RenderDevice((profile, forward) -> {
+        if (MetalGameTarget.independent()) {
+            if (profile != RenderProfile.CORE_41) throw new IllegalStateException("The bgfx game renderer requires the migrated client");
+            return new BgfxGameBackend();
+        }
+        return profile == RenderProfile.CORE_41 ? new Core41Backend() : new CompatibilityBackend(forward);
+    });
     private RenderSystem() {}
     public static RenderContext attach(Object key, boolean forwardCompatible, Runnable displayListRecorder) {
         return DEVICE.attach(key, forwardCompatible, displayListRecorder);
@@ -29,5 +36,5 @@ public final class RenderSystem {
     public static void completeFrame(int width, int height, boolean presented) { DEVICE.completeFrame(width, height, presented); }
     public static boolean insideBeginEnd() { return DEVICE.insideBeginEnd(); }
     public static void recordDisplayList() { DEVICE.recordDisplayList(); }
-    public static boolean loadBindings() { return CompatibilityBackend.loadBindings(); }
+    public static boolean loadBindings() { return MetalGameTarget.independent() || CompatibilityBackend.loadBindings(); }
 }

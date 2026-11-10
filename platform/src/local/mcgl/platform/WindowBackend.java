@@ -18,6 +18,7 @@ public interface WindowBackend {
     void releaseContext();
     void checkContextThread();
     boolean isCurrent();
+    default void prepareFrame() {}
     void swapBuffers();
     void setSwapInterval(int interval);
     void awaitWithoutContextLock(Runnable wait);

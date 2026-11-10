@@ -15,7 +15,8 @@ public final class NativeLibraries {
 
     public static File resolve(Library library) {
         requireSupportedHost(System.getProperty("os.name"), System.getProperty("os.arch"));
-        String directory = System.getProperty("org.lwjgl.librarypath");
+        String directory = library == Library.OPENAL_SOFT ? null : System.getProperty("mcgl.metal.windowpath");
+        if (directory == null) directory = System.getProperty("org.lwjgl.librarypath");
         if (directory == null) throw new IllegalStateException("Missing bundled native library path");
         String name;
         switch (library) {

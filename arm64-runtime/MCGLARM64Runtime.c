@@ -10,7 +10,9 @@
 #include <unistd.h>
 
 #import <Cocoa/Cocoa.h>
+#ifndef MCGL_DIRECT_METAL
 #import <OpenGL/OpenGL.h>
+#endif
 
 typedef jint (*create_java_vm_fn)(JavaVM **, void **, void *);
 
@@ -234,8 +236,8 @@ int main(int argc, char **argv) {
     }
     setenv("JAVA_HOME", [java_home_path fileSystemRepresentation], 1);
 
-    // Bootstrap Cocoa and the legacy OpenGL renderer before the headless JVM
-    // can establish its own AWT/AppKit state.  The first macOS thread remains
+    // Bootstrap Cocoa before the headless JVM can establish its own
+    // AWT/AppKit state. The first macOS thread remains
     // in NSApplication's event loop; the Java game loop runs on a worker and
     // synchronously schedules LWJGL window operations back to this thread.
     NSApplication *application = [NSApplication sharedApplication];
@@ -246,31 +248,47 @@ int main(int argc, char **argv) {
     fprintf(stdout, "Runtime: Cocoa initialized before Java VM; screens=%lu mainThread=%s.\n",
             (unsigned long)[screens count], [NSThread isMainThread] ? "true" : "false");
 
-    NSOpenGLPixelFormatAttribute probe_attributes[] = {
-        NSOpenGLPFAAccelerated,
-        NSOpenGLPFANoRecovery,
-        NSOpenGLPFADoubleBuffer,
-        NSOpenGLPFAAlphaSize, (NSOpenGLPixelFormatAttribute)8,
-        NSOpenGLPFAColorSize, (NSOpenGLPixelFormatAttribute)24,
-        NSOpenGLPFADepthSize, (NSOpenGLPixelFormatAttribute)24,
-        NSOpenGLPFAStencilSize, (NSOpenGLPixelFormatAttribute)8,
-        NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersionLegacy,
-        (NSOpenGLPixelFormatAttribute)0
-    };
-    NSOpenGLPixelFormat *probe_format = [[NSOpenGLPixelFormat alloc]
-                                         initWithAttributes:probe_attributes];
-    if (probe_format == nil) {
-        fprintf(stderr, "Runtime: Cocoa OpenGL 2.1 preflight failed before Java VM.\n");
+#ifndef MCGL_DIRECT_METAL
+    const char *renderer_choice = getenv("MCGL_RENDERER");
+    int use_metal = renderer_choice && strcmp(renderer_choice, "metal") == 0;
+    NSString *metal_library = [resources_root stringByAppendingPathComponent:@"libmcgl-metal-world-direct.dylib"];
+    const char *requested_metal = getenv("MCGL_METAL_LIVE_LIBRARY");
+    if (use_metal && (!requested_metal || strcmp(requested_metal, [metal_library fileSystemRepresentation]) != 0
+            || access(requested_metal, R_OK) != 0)) {
+        fprintf(stderr, "Runtime: the bundled Metal library is unavailable.\n");
         [appkit_pool drain];
         return 76;
     }
-    fprintf(stdout, "Runtime: Cocoa OpenGL 2.1 preflight succeeded before Java VM.\n");
-    [probe_format release];
+    if (!use_metal) {
+        NSOpenGLPixelFormatAttribute probe_attributes[] = {
+            NSOpenGLPFAAccelerated,
+            NSOpenGLPFANoRecovery,
+            NSOpenGLPFADoubleBuffer,
+            NSOpenGLPFAAlphaSize, (NSOpenGLPixelFormatAttribute)8,
+            NSOpenGLPFAColorSize, (NSOpenGLPixelFormatAttribute)24,
+            NSOpenGLPFADepthSize, (NSOpenGLPixelFormatAttribute)24,
+            NSOpenGLPFAStencilSize, (NSOpenGLPixelFormatAttribute)8,
+            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersionLegacy,
+            (NSOpenGLPixelFormatAttribute)0
+        };
+        NSOpenGLPixelFormat *probe_format = [[NSOpenGLPixelFormat alloc] initWithAttributes:probe_attributes];
+        if (probe_format == nil) {
+            fprintf(stderr, "Runtime: Cocoa OpenGL 2.1 preflight failed before Java VM.\n");
+            [appkit_pool drain];
+            return 76;
+        }
+        fprintf(stdout, "Runtime: Cocoa OpenGL 2.1 preflight succeeded before Java VM.\n");
+        [probe_format release];
+    }
+#endif
 
     char java_library_path[2048];
     char lwjgl_library_path[2048];
     char jinput_library_path[2048];
     char java_home_option[2048];
+#ifndef MCGL_DIRECT_METAL
+    char preview_class_path[4096], metal_window_path[2048];
+#endif
     snprintf(java_library_path, sizeof(java_library_path),
              "-Djava.library.path=%s:%s",
              [custom_library_directory fileSystemRepresentation],
@@ -325,7 +343,76 @@ int main(int argc, char **argv) {
     ADD_VM_OPTION(lwjgl_library_path);
     ADD_VM_OPTION(jinput_library_path);
     ADD_VM_OPTION("-Dapple.awt.application.name=Minecraft Galaxy ARM64");
-    ADD_VM_OPTION("-Djava.class.path=mcgl-nativewindow-patch.jar:Minecraft.jar");
+#ifdef MCGL_DIRECT_METAL
+    ADD_VM_OPTION("-Djava.class.path=mcgl-nativewindow-patch.jar:Minecraft.jar:bin/lwjgl.jar");
+    const char *verify_metal = getenv("MCGL_VERIFY_DIRECT_METAL");
+    if (verify_metal != NULL && strcmp(verify_metal, "1") == 0)
+        ADD_VM_OPTION("-Xlog:class+load=info:file=direct-metal-classes.log");
+#else
+    const char *class_path = "-Djava.class.path=mcgl-nativewindow-patch.jar:Minecraft.jar";
+    NSString *preview_library = [resources_root stringByAppendingPathComponent:@"libmcgl-metal-terrain-preview.dylib"];
+    const char *requested_preview = getenv("MCGL_METAL_TERRAIN_LIBRARY");
+    NSString *bgfx_library = [resources_root stringByAppendingPathComponent:@"Bgfx/bgfx-window.dylib"];
+    const char *requested_bgfx = getenv("MCGL_BGFX_LIVE_LIBRARY");
+    int use_bgfx_preview = requested_bgfx
+        && strcmp(requested_bgfx, [bgfx_library fileSystemRepresentation]) == 0 && access(requested_bgfx, R_OK) == 0;
+    if (!use_bgfx_preview) unsetenv("MCGL_BGFX_LIVE_LIBRARY");
+    const char *independent = getenv("MCGL_METAL_INDEPENDENT");
+    int use_independent = use_metal && independent && strcmp(independent, "1") == 0;
+    if (!use_independent) unsetenv("MCGL_METAL_INDEPENDENT");
+    if (use_independent) {
+        NSString *platform_path = [resources_root stringByAppendingPathComponent:@"Bgfx"];
+        int path_length = snprintf(metal_window_path, sizeof(metal_window_path),
+                "-Dmcgl.metal.windowpath=%s", [platform_path fileSystemRepresentation]);
+        if (path_length <= 0 || (size_t)path_length >= sizeof(metal_window_path)
+                || access([[platform_path stringByAppendingPathComponent:@"libglfw.dylib"] fileSystemRepresentation], R_OK) != 0
+                || access([[platform_path stringByAppendingPathComponent:@"libmcgl-mainthread.dylib"] fileSystemRepresentation], R_OK) != 0) {
+            fprintf(stderr, "Runtime: the independent Metal window libraries are unavailable.\n");
+            [appkit_pool drain];
+            return 76;
+        }
+        ADD_VM_OPTION(metal_window_path);
+    }
+    if (use_independent && !use_bgfx_preview) {
+        fprintf(stderr, "Runtime: the independent bgfx Metal renderer is unavailable.\n");
+        [appkit_pool drain];
+        return 76;
+    }
+    if (use_metal || use_bgfx_preview || (requested_preview && strcmp(requested_preview, [preview_library fileSystemRepresentation]) == 0
+            && access(requested_preview, R_OK) == 0)) {
+        NSString *marker_path = [game_path stringByAppendingPathComponent:@".arm64-port-version"];
+        NSString *marker = [NSString stringWithContentsOfFile:marker_path encoding:NSUTF8StringEncoding error:NULL];
+        NSString *renderer = [resources_root stringByAppendingPathComponent:use_independent ? @"Bgfx/lwjgl.jar" : @"PortSupport/bin/lwjgl.jar"];
+        NSString *controllers = [resources_root stringByAppendingPathComponent:@"PortSupport/bin/jinput.jar"];
+        if (([marker isEqualToString:@"Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17\n"]
+                || [marker hasPrefix:@"Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-"])
+                && [renderer rangeOfString:@":"].location == NSNotFound
+                && access([renderer fileSystemRepresentation], R_OK) == 0
+                && access([controllers fileSystemRepresentation], R_OK) == 0) {
+            // The official URLClassLoader delegates to this parent. Load the whole
+            // renderer together so JNI and package-private classes share one owner.
+            int length = snprintf(preview_class_path, sizeof(preview_class_path), "%s:%s:%s",
+                class_path, [renderer fileSystemRepresentation], [controllers fileSystemRepresentation]);
+            if (length > 0 && (size_t)length < sizeof(preview_class_path)) {
+                class_path = preview_class_path;
+                fprintf(stdout, "Runtime: using bundled renderer for %s.\n",
+                        use_independent ? "independent bgfx Metal"
+                        : use_bgfx_preview ? (use_metal ? "the bgfx Metal game window" : "the bgfx terrain preview")
+                                         : use_metal ? "the Metal game window" : "Metal terrain preview");
+            }
+        }
+    }
+    if (use_metal && class_path != preview_class_path) {
+        fprintf(stderr, "Runtime: the saved client is incompatible with this Metal renderer.\n");
+        [appkit_pool drain];
+        return 76;
+    }
+    if (use_bgfx_preview && class_path != preview_class_path) {
+        fprintf(stdout, "Runtime: bgfx terrain preview requires the bundled renderer and a compatible profile.\n");
+        unsetenv("MCGL_BGFX_LIVE_LIBRARY");
+    }
+    ADD_VM_OPTION((char *)class_path);
+#endif
     ADD_VM_OPTION(java_home_option);
 
     const char *multicore_memory = getenv("MCGL_MULTICORE_MEMORY");
@@ -353,7 +440,13 @@ int main(int argc, char **argv) {
     if (chunk_vbo != NULL && strcmp(chunk_vbo, "1") == 0) {
         fprintf(stdout, "Runtime: obsolete MCGL_CHUNK_VBO switch ignored; the game uses the Core chunk renderer.\n");
     }
-    fprintf(stdout, "Runtime: Core 4.1 game renderer with indexed chunk geometry; actual context is verified at window creation.\n");
+#ifdef MCGL_DIRECT_METAL
+    fprintf(stdout, "Runtime: direct Metal bootstrap; Cocoa window has no GL context.\n");
+#else
+    fprintf(stdout, use_independent ? "Runtime: independent bgfx Metal presentation.\n"
+            : use_metal ? "Runtime: Metal presentation with an offscreen Core context.\n"
+            : "Runtime: Core 4.1 game renderer with indexed chunk geometry; actual context is verified at window creation.\n");
+#endif
 #undef ADD_VM_OPTION
 
     void *jvm_library = dlopen([jvm_path fileSystemRepresentation], RTLD_NOW | RTLD_GLOBAL);

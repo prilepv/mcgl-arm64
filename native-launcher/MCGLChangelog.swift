@@ -15,6 +15,12 @@ struct MCGLChangelogEntry {
 
 enum MCGLChangelog {
     static let entries: [MCGLChangelogEntry] = [
+        MCGLChangelogEntry(version: "1.8.0", date: "10 ноября 2026", title: "Рендерер Metal", points: [
+            "Нативный Metal через bgfx на Apple Silicon. В этом режиме игра рисуется без OpenGL и может работать с более высоким FPS.",
+            "Новый интерфейс лаунчера с новостями MCGL и новые иконки для лаунчера и игры.",
+            "Последующие обновления лаунчера можно установить прямо из приложения.",
+            "Исправлен запуск с актуальным официальным клиентом MCGL."
+        ]),
         MCGLChangelogEntry(version: "1.7.5", date: "4 ноября 2026", title: "Исправление запуска", points: [
             "Исправлен запуск игры после обновления официального клиента MCGL."
         ]),

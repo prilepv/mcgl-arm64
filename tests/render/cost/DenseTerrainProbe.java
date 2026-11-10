@@ -7,17 +7,22 @@ import org.lwjgl.opengl.*;
 
 /** Account-free dense original-geometry workload. Not a game FPS benchmark. */
 public final class DenseTerrainProbe {
-    private static final int PARTS=4096,DRAW_PARTS=3072,VERTICES=1280,SIZE=256;
+    private static final int PARTS=Integer.getInteger("mcgl.test.parts",4096),DRAW_PARTS=Integer.getInteger("mcgl.test.drawParts",3072),VERTICES=1280,SIZE=256;
     private static final Map<Integer,byte[]> snapshots=new HashMap<Integer,byte[]>();
     private static final java.lang.management.ThreadMXBean cpu=java.lang.management.ManagementFactory.getThreadMXBean();
     private static final int[] geometry=geometry();
     private static int rebuildCursor;
+    private static boolean offscreen,streaming,presentation,flushBeforeWait,presentationVsync;
     public static void main(String[] args)throws Exception {
-        Display.setDisplayMode(new DisplayMode(300,220));Display.setTitle("MCGL dense geometry validation");
-        MCGLCoreDisplay.create(new PixelFormat().withDepthBits(24).withStencilBits(8));
-        try{for(boolean wide:new boolean[]{false,true,true,false}){
+        offscreen=Arrays.asList(args).contains("--offscreen");
+        streaming=Arrays.asList(args).contains("--streaming");
+        presentation=Arrays.asList(args).contains("--presentation");
+        presentationVsync=Arrays.asList(args).contains("--vsync");
+        if(offscreen)OffscreenCoreContext.open();
+        else{Display.setDisplayMode(new DisplayMode(300,220));Display.setTitle("MCGL dense geometry validation");MCGLCoreDisplay.create(new PixelFormat().withDepthBits(24).withStencilBits(8));}
+        try{for(boolean wide:streaming||presentation?new boolean[]{true}:offscreen?new boolean[]{true,true}:new boolean[]{false,true,true,false}){
             resetTestBatch();System.setProperty("mcgl.terrain.wideArena",Boolean.toString(wide));run(wide);
-        }}finally{Display.destroy();Display.shutdown();}
+        }}finally{if(offscreen)OffscreenCoreContext.close();else{Display.destroy();Display.shutdown();}}
     }
     /** Isolated fixture only: discard the empty terrain queue so each placement policy starts fresh in one GL context. */
     private static void resetTestBatch()throws Exception {
@@ -42,7 +47,7 @@ public final class DenseTerrainProbe {
             }
             for(int part=0;part<PARTS;part++)replace(g,first,part);
             System.out.println("DENSE_TERRAIN_SCENE wide="+wide+" parts="+PARTS+" drawn="+DRAW_PARTS+" vertices="+(DRAW_PARTS*VERTICES)+" arena_pages="+g.terrainArenaPages()+" arena_members="+g.terrainArenaMembers()+" arena_bytes="+g.terrainArenaBytes()+" max_vertex_uniform_components="+GL11C.glGetInteger(GL20C.GL_MAX_VERTEX_UNIFORM_COMPONENTS));
-            for(int test=0;test<3;test++){
+            for(int test=streaming||presentation?3:0;test<3;test++){
                 int textureCount=test==0?1:8;boolean rebuild=test==2;
                 byte[] reference=snapshots.get(textureCount);
                 for(int mode=0;mode<4;mode++){
@@ -55,17 +60,47 @@ public final class DenseTerrainProbe {
                 }present(g,fbo);}
                 for(int mode=0;mode<4;mode++){Arrays.sort(samples[mode]);Arrays.sort(cpuSamples[mode]);System.out.printf(Locale.ROOT,"DENSE_TERRAIN_COST wide=%s textures=%d rebuild=%s order=blocks16 mode=%s logical_calls=%d p50_ms=%.3f p95_ms=%.3f cpu_p50_ms=%.3f synthetic-not-world-fps%n",wide,textureCount,rebuild,new String[]{"195","arrays","unlit","both"}[mode],calls[mode],samples[mode][8],samples[mode][15],cpuSamples[mode][8]);}
             }
-            if(g.glGetError()!=0)throw new AssertionError("native error");System.out.println("DENSE_TERRAIN_PASS exact-RGBA-depth");
+            if(streaming)stream(g,first,textures,fbo);
+            if(presentation)presentCost(g,first,textures,fbo);
+            if(g.glGetError()!=0)throw new AssertionError("native error");System.out.println("DENSE_TERRAIN_PASS "+(streaming?"queued-streaming":presentation?"presentation-timing":"exact-RGBA-depth"));
         }catch(Throwable failure){failure.printStackTrace();throw failure;}finally{
             g.abortOriginalChunk();
             g.glDeleteLists(first,PARTS*3);for(int texture:textures)if(texture!=0)g.glDeleteTextures(texture);
             g.GL30_glBindFramebuffer(GL30C.GL_FRAMEBUFFER,0);GL30C.glDeleteFramebuffers(fbo);GL30C.glDeleteRenderbuffers(color);GL30C.glDeleteRenderbuffers(depth);
         }
     }
+    private static void presentCost(GameRenderCommands g,int first,int[] textures,int fbo){
+        configure(3);
+        for(boolean flush:new boolean[]{false,true,true,false}){
+            if(presentationVsync){Display.setVSyncEnabled(flush);flushBeforeWait=false;}else flushBeforeWait=flush;
+            double[] times=new double[360];long previous=System.nanoTime();
+            for(int iteration=-60;iteration<360;iteration++){
+                draw(g,first,textures,8,(iteration&1)==0?0:.0001f);present(g,fbo);long now=System.nanoTime();
+                if(iteration>=0)times[iteration]=(now-previous)/1e6;previous=now;
+            }
+            Arrays.sort(times);System.out.printf(Locale.ROOT,"DENSE_PRESENT_COST %s=%s p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f synthetic-not-world-fps%n",presentationVsync?"vsync":"preflush",flush,times[180],times[342],times[356],times[359]);
+        }
+    }
+    /** Keep previous draws queued while rebuilding; finishing before each upload hides driver stalls. */
+    private static void stream(GameRenderCommands g,int first,int[] textures,int fbo)throws Exception{
+        configure(3);double[] upload=new double[240],frame=new double[240],cpuWork=new double[240],allocation=new double[240];int rebuilds=Integer.getInteger("mcgl.test.rebuilds",8);
+        com.sun.management.ThreadMXBean memory=(com.sun.management.ThreadMXBean)cpu;long thread=Thread.currentThread().getId();
+        GL11C.glFinish();
+        for(int iteration=-40;iteration<240;iteration++){
+            long start=System.nanoTime(),startCpu=cpu.getCurrentThreadCpuTime(),beforeBytes=memory.getThreadAllocatedBytes(thread);draw(g,first,textures,8,(iteration&1)==0?0:.0001f);long build=System.nanoTime();
+            for(int i=0;i<rebuilds;i++)replace(g,first,(rebuildCursor++*1543)%PARTS);
+            long done=System.nanoTime();present(g,fbo);
+            if(iteration>=0){upload[iteration]=(done-build)/1e6;frame[iteration]=(System.nanoTime()-start)/1e6;cpuWork[iteration]=(cpu.getCurrentThreadCpuTime()-startCpu)/1e6;allocation[iteration]=memory.getThreadAllocatedBytes(thread)-beforeBytes;}
+            long remaining=8_333_333-(System.nanoTime()-start);if(remaining>0)Thread.sleep(remaining/1_000_000,(int)(remaining%1_000_000));
+        }
+        GL11C.glFinish();Arrays.sort(upload);Arrays.sort(frame);Arrays.sort(cpuWork);Arrays.sort(allocation);
+        System.out.printf(Locale.ROOT,"DENSE_TERRAIN_STREAM builds_per_frame=%d upload_p50_ms=%.3f upload_p95_ms=%.3f upload_p99_ms=%.3f upload_max_ms=%.3f work_p95_ms=%.3f work_max_ms=%.3f synthetic-not-world-fps%n",rebuilds,upload[120],upload[228],upload[237],upload[239],frame[228],frame[239]);
+        System.out.printf(Locale.ROOT,"DENSE_TERRAIN_JAVA cpu_p50_ms=%.3f bytes_p50=%.0f synthetic-not-world-fps%n",cpuWork[120],allocation[120]);
+    }
     private static void configure(int mode){System.setProperty("mcgl.terrain.materials","true");System.setProperty("mcgl.terrain.textureArrays",Boolean.toString((mode&1)!=0));System.setProperty("mcgl.graphics.unlitShaders",Boolean.toString(mode>=2));}
     private static int[] geometry(){int[] raw=new int[VERTICES*8];for(int v=0;v<VERTICES;v++){int quad=v/4,corner=v%4;float x=(quad%16+(corner==1||corner==2?1:0))/512f,y=(quad/16+(corner>=2?1:0))/512f;raw[v*8]=Float.floatToRawIntBits(x);raw[v*8+1]=Float.floatToRawIntBits(y);raw[v*8+2]=Float.floatToRawIntBits((quad%3)*.0001f);raw[v*8+3]=Float.floatToRawIntBits(corner==1||corner==2?1:0);raw[v*8+4]=Float.floatToRawIntBits(corner>=2?1:0);raw[v*8+5]=-1;raw[v*8+6]=0x007f0000;}return raw;}
     private static void replace(GameRenderCommands g,int first,int part){int handle=first+part*3;g.beginOriginalChunk(handle,3);g.glNewList(handle,4864);g.glPushMatrix();g.glTranslatef((part%64)/32f-1,(part/64)/32f-1,(part%5)*.01f);g.raw(geometry,geometry.length,VERTICES,7,false,true,true,true,true,true);g.glPopMatrix();g.glEndList();g.finishOriginalChunk();}
-    private static void present(GameRenderCommands g,int framebuffer){g.GL30_glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER,framebuffer);g.GL30_glBindFramebuffer(GL30C.GL_DRAW_FRAMEBUFFER,0);GL30C.glBlitFramebuffer(0,0,SIZE,SIZE,0,0,300,220,GL11C.GL_COLOR_BUFFER_BIT,GL11C.GL_NEAREST);Display.update();g.GL30_glBindFramebuffer(GL30C.GL_FRAMEBUFFER,framebuffer);}
+    private static void present(GameRenderCommands g,int framebuffer){if(offscreen){GL11C.glFlush();RenderSystem.completeFrame(SIZE,SIZE,false);return;}g.GL30_glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER,framebuffer);g.GL30_glBindFramebuffer(GL30C.GL_DRAW_FRAMEBUFFER,0);GL30C.glBlitFramebuffer(0,0,SIZE,SIZE,0,0,300,220,GL11C.GL_COLOR_BUFFER_BIT,GL11C.GL_NEAREST);if(flushBeforeWait)GL11C.glFlush();Display.update();g.GL30_glBindFramebuffer(GL30C.GL_FRAMEBUFFER,framebuffer);}
     private static void draw(GameRenderCommands g,int first,int[] textures,int textureCount,float camera){
         g.glDepthMask(true);g.glClearColor(0,0,0,1);g.glClear(GL11C.GL_COLOR_BUFFER_BIT|GL11C.GL_DEPTH_BUFFER_BIT);g.glLoadIdentity();g.glTranslatef(camera,0,0);
         int scope=g.beginOriginalTerrain();try{for(int i=0;i<DRAW_PARTS;i++){g.glBindTexture(3553,textures[i/8%textureCount]);if(i%22==0)g.glDepthMask(i/22%2==0);int part=((i/16*151)%(PARTS/16))*16+i%16;g.glCallList(first+part*3);}}finally{g.endOriginalTerrain(scope);}

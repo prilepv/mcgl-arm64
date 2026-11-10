@@ -40,7 +40,8 @@ struct ImageAssetTest {
             }
             let insetX = max(Int(ceil(Double(w) * 0.08)), w / 10)
             let insetY = max(Int(ceil(Double(h) * 0.08)), h / 10)
-            for (x, y) in [(w / 2, insetY), (insetX, h / 2), (w - insetX - 1, h / 2)] {
+            // Sample beside the cube's top point, which can reach the center pixel at 16px.
+            for (x, y) in [(w / 4, insetY), (insetX, h / 2), (w - insetX - 1, h / 2)] {
                 let color = image.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
                 precondition(color.alphaComponent > 0.99 && color.redComponent > 0.97
                              && color.greenComponent > 0.97 && color.blueComponent > 0.97,

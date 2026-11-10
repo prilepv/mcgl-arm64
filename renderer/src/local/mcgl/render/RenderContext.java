@@ -1,5 +1,7 @@
 package local.mcgl.render;
 
+import java.util.function.Consumer;
+
 /** One context generation. A retained command facade cannot outlive or change its owner. */
 public final class RenderContext {
     private final RenderBackend backend;
@@ -17,6 +19,7 @@ public final class RenderContext {
     private volatile Thread owner;
     private volatile boolean closed;
     private volatile long completedFrames, presentedFrames;
+    private Consumer<Boolean> terrainCaptureFrame;
     private volatile int surfaceWidth, surfaceHeight;
 
     RenderContext(RenderBackend backend, RenderProfile profile, long generation, Runnable displayListRecorder) {
@@ -102,7 +105,7 @@ public final class RenderContext {
     void close() {
         checkAvailable();
         if (owner != null) throw new IllegalStateException("Detach render context before closing it");
-        try { backend.close(); } finally { closed = true; if (game != null) { game.abandon(); game = null; } }
+        try { backend.close(); } finally { closed = true; terrainCaptureFrame = null; if (game != null) { game.abandon(); game = null; } }
     }
     void completeFrame(int width, int height, boolean presented) {
         checkOwner();
@@ -110,7 +113,13 @@ public final class RenderContext {
         surfaceWidth = width; surfaceHeight = height;
         completedFrames++;
         if (presented) presentedFrames++;
+        if (terrainCaptureFrame != null) terrainCaptureFrame.accept(presented);
         if (game != null) gameDiagnostics.frame(game);
+    }
+    public void registerTerrainCapture(Consumer<Boolean> callback) {
+        checkOwner();
+        if (terrainCaptureFrame != null) throw new IllegalStateException("Terrain capture already registered");
+        terrainCaptureFrame = callback;
     }
     boolean insideBeginEnd() { checkOwner(); return game != null && game.insideBeginEnd() || backend.insideBeginEnd(); }
     void recordDisplayList() { checkOwner(); displayListRecorder.run(); }

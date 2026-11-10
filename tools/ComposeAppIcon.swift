@@ -33,15 +33,37 @@ struct ComposeAppIcon {
         context.shouldAntialias = true
         context.cgContext.clear(canvas)
 
-        // An opaque white plate with truly empty margins; no generated mask.
-        // Render at the requested size so the contour is antialiased natively.
+        // The plate and its lighting are rendered at each native icon size.
         let tile = canvas.insetBy(dx: side * 0.08, dy: side * 0.08)
         let outline = NSBezierPath(roundedRect: tile,
                                    xRadius: side * 0.185, yRadius: side * 0.185)
-        NSColor.white.setFill()
-        outline.fill()
+        let porcelain = NSGradient(colorsAndLocations:
+            (.white, 0), (.white, 0.26),
+            (NSColor(srgbRed: 0.98, green: 0.985, blue: 0.995, alpha: 1), 0.64),
+            (NSColor(srgbRed: 0.91, green: 0.92, blue: 0.95, alpha: 1), 1))!
+        porcelain.draw(in: outline, angle: -90)
         outline.addClip()
-        source.draw(in: canvas.insetBy(dx: side * 0.12, dy: side * 0.12),
+
+        outline.lineWidth = side * 0.006
+        NSColor.white.withAlphaComponent(0.63).setStroke()
+        outline.stroke()
+
+        let shadow = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [
+            NSColor(srgbRed: 0.12, green: 0.10, blue: 0.20, alpha: 0.36).cgColor,
+            NSColor(srgbRed: 0.12, green: 0.10, blue: 0.20, alpha: 0.17).cgColor,
+            NSColor(srgbRed: 0.12, green: 0.10, blue: 0.20, alpha: 0).cgColor
+        ] as CFArray, locations: [0, 0.43, 1])!
+        let drawing = context.cgContext
+        drawing.saveGState()
+        drawing.translateBy(x: side * 0.50, y: side * 0.175)
+        drawing.scaleBy(x: side * 0.27, y: side * 0.058)
+        drawing.drawRadialGradient(shadow, startCenter: .zero, startRadius: 0,
+                                   endCenter: .zero, endRadius: 1, options: [])
+        drawing.restoreGState()
+
+        let symbol = NSRect(x: side * 0.14, y: side * 0.172,
+                            width: side * 0.72, height: side * 0.72)
+        source.draw(in: symbol,
                     from: .zero, operation: .sourceOver, fraction: 1)
         context.flushGraphics()
 

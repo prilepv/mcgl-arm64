@@ -2,14 +2,11 @@
 
 ## Статус
 
-Выпуск **1.7.5 build 199** адаптирует принятую основу 1.7.2 к обновлённому
-официальному клиенту MCGL. Оптимизации геометрии, моделей, материалов мира,
-текстурные массивы и облегчённые шейдеры сохранены. Пользователь принял build 199
-и разрешил её выпуск. Маркер установщика `lwjgl3-game-original-core-17` обновляет
-старые игровые компоненты без изменения выбранных настроек графики.
-Java 21, LWJGL 3, GLFW и Core-рендер сохранены; пункты 11–13 карты не объявлены
-полностью завершёнными. Текущие возможности и ограничения — в
-[заметках 1.7.5](docs/RELEASE-NOTES-1.7.5.md); ниже сохранена история этапов.
+Выпуск **1.8.0 build 244** добавляет нативный режим Metal через bgfx.
+Лаунчер и Metal-компоненты пересобраны для выпуска поверх ресурсов проверочной
+сборки 243. Режим OpenGL использует обычную библиотеку клиента, а Metal
+получает отдельную библиотеку, окно GLFW без NSGL и bgfx-шейдеры.
+[Описание выпуска](docs/RELEASE-NOTES-1.8.0.md).
 
 ### Проверка обновления официального клиента
 
@@ -318,3 +315,21 @@ bash tools/build-launcher-candidate.sh \
 
 Скрипт создания DMG: `tools/build-portable-dmg.sh` (запустите без аргументов для
 описания параметров). Упаковка не заменяет подпись или нотариализацию.
+
+
+### Добавление Metal в приложение
+
+После сборки базовой APP используйте `tools/build-bgfx-preview.sh`. Он собирает
+отдельные Metal-библиотеки, компилирует шейдеры и подписывает результат.
+Каталог `BGFX_DEPENDENCIES` должен содержать два JAR LWJGL bgfx 3.4.3
+(Java и macOS ARM64), `shaderc` и `bgfx_shader.sh`. Скрипт проверяет
+SHA-256 всех четырёх файлов. Архив исходников GLFW берётся из каталога
+`GLFW_DEPENDENCIES` и проверяется по `third-party/glfw-source-sha256.txt`.
+
+```sh
+bash tools/build-bgfx-preview.sh BASE.app /absolute/path/package BGFX_DEPENDENCIES GLFW_DEPENDENCIES
+bash tools/verify-metal-game-window.sh "/absolute/path/package/Minecraft Galaxy ARM64.app" 120 --independent
+```
+
+Положите `bootstrap-release/README.md` и `bootstrap-release/THIRD-PARTY-NOTICES.md`
+в каталог с итоговой APP перед упаковкой в DMG.
