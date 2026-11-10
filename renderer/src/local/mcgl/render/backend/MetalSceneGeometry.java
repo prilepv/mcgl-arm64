@@ -38,7 +38,7 @@ final class MetalSceneGeometry {
             normal(out, in, at + (flatNormal == null ? 44 : flatNormal.offset), currentNormal, provoking);
         }
         out.flip();
-        return new MeshData(GameTerrainFormat.LAYOUT, out, mesh.indices());
+        return MeshData.takeOwnedVertices(GameTerrainFormat.LAYOUT, out, mesh.indices());
     }
 
     static MeshData lines(MeshData mesh, GameRenderState state, int mask) {
@@ -59,7 +59,7 @@ final class MetalSceneGeometry {
                         .put(in.get(at + normal.offset + 2)).put((byte)0);
             }
             out.flip();
-            packed = new MeshData(GameTerrainFormat.LAYOUT, out, mesh.indices());
+            packed = MeshData.takeOwnedVertices(GameTerrainFormat.LAYOUT, out, mesh.indices());
         }
         // Four vertices per expanded line, two copies of each endpoint.
         int[] indices = new int[mesh.vertexCount() / 2];
@@ -87,7 +87,7 @@ final class MetalSceneGeometry {
             indices[i] = i;
         }
         out.flip();
-        return new MeshData(GameTerrainFormat.LAYOUT, out, IndexData.of(indices));
+        return MeshData.takeOwnedVertices(GameTerrainFormat.LAYOUT, out, IndexData.of(indices));
     }
 
     private static ByteBuffer buffer(int vertices) {

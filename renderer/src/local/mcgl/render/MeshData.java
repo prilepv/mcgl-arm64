@@ -12,7 +12,7 @@ public final class MeshData {
         this(layout, vertices, indices, false);
     }
     /** The caller transfers a freshly allocated buffer with no remaining writable aliases. */
-    static MeshData takeOwnedVertices(VertexLayout layout, ByteBuffer vertices, IndexData indices) {
+    public static MeshData takeOwnedVertices(VertexLayout layout, ByteBuffer vertices, IndexData indices) {
         return new MeshData(layout, vertices, indices, true);
     }
     private MeshData(VertexLayout layout, ByteBuffer vertices, IndexData indices, boolean owned) {

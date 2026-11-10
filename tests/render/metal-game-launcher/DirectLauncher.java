@@ -9,6 +9,7 @@ import local.mcgl.render.RenderSystem;
 import local.mcgl.render.ShaderProgram;
 import local.mcgl.render.ShaderSources;
 import local.mcgl.render.backend.MetalTextureUploadProbe;
+import local.mcgl.render.backend.MetalSceneModelProbe;
 import local.mcgl.render.backend.BgfxTurnStress;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
@@ -66,7 +67,8 @@ public final class DirectLauncher {
             if (!independent && GL11C.glGetInteger(GL30C.GL_DRAW_FRAMEBUFFER_BINDING) != internal)
                 throw new AssertionError("Binding the logical default lost the offscreen target");
             g.GL30_glDeleteFramebuffers(custom);
-            if (!independent) MetalTextureUploadProbe.verify();
+            if (independent) MetalSceneModelProbe.verify();
+            else MetalTextureUploadProbe.verify();
             int texture = g.glGenTextures();
             g.glBindTexture(GL11C.GL_TEXTURE_2D, texture);
             g.glTexParameteri(GL11C.GL_TEXTURE_2D, GL11C.GL_TEXTURE_MIN_FILTER, GL11C.GL_NEAREST);

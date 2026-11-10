@@ -294,12 +294,24 @@ final class MetalWorldCapture {
                 pass.raster[7] = 0;
                 pass.polygonFactor = pass.polygonUnits = 0;
             } else {
-                data = source == null ? resident.get(mesh) : MetalSceneGeometry.mesh(source, state, mask);
+                data = source == null ? sceneMesh(mesh, mask) : MetalSceneGeometry.mesh(source, state, mask);
             }
             if ((mask & 128) != 0) mask |= 2 | 4 | 8 | 16;
             appendScene(pass, data, (mask & 127) | (line ? MetalWorldFrame.Draw.LINE : 0), false, !line && source == null);
         } catch (RuntimeException | LinkageError error) { disable(error); }
         finally { optionalPass = false; }
+    }
+
+    MeshData sceneMesh(Mesh mesh, int mask) {
+        MeshData packed = resident.get(mesh);
+        if (packed != null || !MetalGameTarget.independent()) return packed;
+        // The independent backend still owns the immutable CPU mesh when the packed
+        // copy is evicted by chunk streaming. No GPU readback is needed.
+        MeshData source = mesh.snapshot(READBACK_BUDGET);
+        if (source == null) return null;
+        packed = MetalSceneGeometry.mesh(source, state, mask);
+        if (packed != null && (mask & ~127) == 0) remember(mesh, packed);
+        return packed;
     }
 
     void text(ByteBuffer input, int vertices, int stride) {

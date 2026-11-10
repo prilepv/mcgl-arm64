@@ -18,7 +18,7 @@ mkdir -p "$profile/bin" "$work/classes"
 ln -s "$resources/PortSupport/bin/natives" "$profile/bin/natives"
 printf 'Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17\n' > "$profile/.arm64-port-version"
 "$jdk/bin/javac" --release 21 -cp "$resources/PortSupport/bin/lwjgl.jar" -d "$work/classes" \
-    "$root/tests/render/metal-game-launcher/"{DirectLauncher,MetalTextureUploadProbe,BgfxTurnStress}.java
+    "$root/tests/render/metal-game-launcher/"{DirectLauncher,MetalTextureUploadProbe,MetalSceneModelProbe,BgfxTurnStress}.java
 "$jdk/bin/jar" cf "$profile/mcgl-nativewindow-patch.jar" -C "$work/classes" .
 swiftc -module-cache-path "$work/modules" "$root/tests/lwjgl3/RuntimeHarness.swift" -o "$work/harness"
 if [[ ${3:-} == --bgfx || ${3:-} == --independent ]]; then
@@ -42,6 +42,7 @@ if [[ ${3:-} == --bgfx || ${3:-} == --independent ]]; then
     grep -Eq '^\[MCGL bgfx live\] closed .*menus=[1-9][0-9]* worlds=[1-9][0-9]*' "$work/runtime.log"
     if grep -Eq 'fallback|unavailable|OpenGL 2.1 preflight' "$work/runtime.log"; then exit 1; fi
     if [[ ${3:-} == --independent ]]; then
+        grep -q '^METAL_SCENE_MODEL_RECOVERY_PASS' "$work/runtime.log"
         grep -q 'framebuffer=metal resized=480x320' "$work/runtime.log"
         grep -q 'game window has no OpenGL context' "$work/runtime.log"
         grep -q 'using bundled renderer for independent bgfx Metal' "$work/runtime.log"

@@ -17,6 +17,6 @@ final class GameTerrainFormat {
             output.putInt(input.getInt(at+20));
             output.put(input.get(at+24)).put(input.get(at+25)).put(input.get(at+26)).put((byte)0);
         }
-        output.flip();return new MeshData(LAYOUT,output,source.indices());
+        output.flip();return MeshData.takeOwnedVertices(LAYOUT,output,source.indices());
     }
 }
