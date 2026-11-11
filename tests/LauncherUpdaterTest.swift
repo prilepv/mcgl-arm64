@@ -40,13 +40,15 @@ struct LauncherUpdaterTest {
           "assets": [{
             "name": "Minecraft-Galaxy-ARM64-Bootstrap-1.6.5.dmg",
             "browser_download_url": "https://example.invalid/release.dmg",
-            "digest": "sha256:0123"
+            "digest": "sha256:0123",
+            "size": 222635082
           }]
         }
         """.data(using: .utf8)!
         let release = try JSONDecoder().decode(MCGLGitHubRelease.self, from: json)
         check(release.version == "1.6.5")
         check(release.diskImage?.name.hasSuffix(".dmg") == true)
+        check(release.diskImage?.size == 222635082)
         print("LAUNCHER_UPDATER_PASS semantic versions, GitHub release metadata, DMG selection")
     }
 

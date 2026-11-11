@@ -414,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     static let windowSize = NSSize(width: 1060, height: 662)
     private static let newsRowHeight: CGFloat = 47
     private enum HeaderPanel { case accounts, settings }
-    enum UpdatePhase: CaseIterable { case idle, checking, downloading, restarting }
+    enum UpdatePhase: CaseIterable { case idle, available, checking, downloading, verifying, restarting }
     private let preferences: MCGLLauncherPreferences
     private let resourcesOverride: URL?
     private let supportRootOverride: URL?
@@ -530,6 +530,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private let updateGlyph = NSImageView()
     private let updateSpinner = NSProgressIndicator()
     private let updateDownloadProgress = NSProgressIndicator()
+    private var availableLauncherUpdate: MCGLGitHubRelease?
+    private var updateProgressTimer: Timer?
     private var installingLauncherUpdate = false
     private var logView: NSTextView!
     private var gameApplication: NSRunningApplication?
@@ -570,6 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        updateProgressTimer?.invalidate()
         closeHeaderPanel()
         if let gameApplication, !gameApplication.isTerminated {
             gameApplication.terminate()
@@ -908,6 +911,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func previewUpdatePhaseForTesting(_ phase: UpdatePhase) {
         showUpdatePhase(phase, status: "Проверка при запуске")
+    }
+
+    func previewUpdateProgressForTesting(received: Int64, total: Int64) {
+        showLauncherDownloadProgress(received: received, total: total)
     }
 
     func previewMetalStarsForTesting(_ active: Bool) {
@@ -1807,7 +1814,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         updateSpinner.identifier = NSUserInterfaceItemIdentifier("launcher-check-spinner")
         updateDownloadProgress.style = .bar
         updateDownloadProgress.controlSize = .small
-        updateDownloadProgress.isIndeterminate = true
+        updateDownloadProgress.minValue = 0
+        updateDownloadProgress.maxValue = 100
         updateDownloadProgress.identifier = NSUserInterfaceItemIdentifier("launcher-download-progress")
         let github = actionButton("GitHub", symbol: "arrow.up.right", action: #selector(openRepository))
         github.identifier = NSUserInterfaceItemIdentifier("launcher-github")
@@ -1848,29 +1856,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     private func showUpdatePhase(_ phase: UpdatePhase, status: String, title: String? = nil) {
+        if phase != .downloading {
+            updateProgressTimer?.invalidate()
+            updateProgressTimer = nil
+        }
         let symbol: String
         let phaseTitle: String
         switch phase {
         case .idle: symbol = "arrow.clockwise"; phaseTitle = "Обновления"
+        case .available: symbol = "arrow.down.circle.fill"; phaseTitle = "Обновление"
         case .checking: symbol = "arrow.clockwise"; phaseTitle = "Проверяем…"
         case .downloading: symbol = "arrow.down"; phaseTitle = "Скачиваем…"
+        case .verifying: symbol = "checkmark.shield"; phaseTitle = "Проверяем…"
         case .restarting: symbol = "arrow.clockwise"; phaseTitle = "Перезапуск…"
         }
-        updateButton.isEnabled = phase == .idle
-        updateTitle.stringValue = title ?? phaseTitle
-        updateStatusLabel.stringValue = status
-        updateButton.toolTip = status
-        updateButton.setAccessibilityLabel(updateTitle.stringValue)
-        updateButton.setAccessibilityValue(status)
+        updateButton.isEnabled = phase == .idle || phase == .available
+        updateButton.selectedAppearance = phase == .available
+        setUpdateLabels(title: title ?? phaseTitle, status: status)
         updateGlyph.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let spinning = animate && phase == .checking
-        let downloading = animate && phase == .downloading
+        let spinning = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && phase == .checking
         updateGlyph.isHidden = spinning
         if spinning { updateSpinner.startAnimation(nil) } else { updateSpinner.stopAnimation(nil) }
-        if downloading { updateDownloadProgress.startAnimation(nil) } else { updateDownloadProgress.stopAnimation(nil) }
         updateSpinner.isHidden = !spinning
-        updateDownloadProgress.isHidden = !downloading
+        updateDownloadProgress.stopAnimation(nil)
+        updateDownloadProgress.isHidden = true
+    }
+
+    private func setUpdateLabels(title: String, status: String) {
+        updateTitle.stringValue = title
+        updateStatusLabel.stringValue = status
+        updateButton.toolTip = status
+        updateButton.setAccessibilityLabel(title)
+        updateButton.setAccessibilityValue(status)
+    }
+
+    private func trackLauncherDownload(_ task: URLSessionDownloadTask?, size: Int64?) {
+        guard let task else { return }
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            let expected = task.countOfBytesExpectedToReceive
+            self.showLauncherDownloadProgress(received: task.countOfBytesReceived,
+                                              total: expected > 0 ? expected : size ?? 0)
+        }
+        updateProgressTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        timer.fire()
+    }
+
+    private func showLauncherDownloadProgress(received: Int64, total: Int64) {
+        let bytes = max(0, received)
+        let transferred = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        let knownSize = total > 0
+        let changeMode = knownSize == updateDownloadProgress.isIndeterminate
+        if changeMode {
+            updateDownloadProgress.stopAnimation(nil)
+            updateDownloadProgress.isIndeterminate = !knownSize
+        }
+        if knownSize {
+            let percent = min(100, Double(bytes) / Double(total) * 100)
+            let expected = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+            updateDownloadProgress.doubleValue = percent
+            updateDownloadProgress.isHidden = false
+            setUpdateLabels(title: "Загрузка \(Int(percent))%", status: "\(transferred) из \(expected)")
+        } else {
+            let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            let shouldStart = animate && (updateDownloadProgress.isHidden || changeMode)
+            updateDownloadProgress.isHidden = !animate
+            if shouldStart { updateDownloadProgress.startAnimation(nil) }
+            if !animate { updateDownloadProgress.stopAnimation(nil) }
+            setUpdateLabels(title: "Скачиваем…", status: "Скачано \(transferred)")
+        }
     }
 
     private func styleCheckbox(_ button: NSButton) {
@@ -2165,6 +2220,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     @objc private func checkForLauncherUpdate() {
+        if let availableLauncherUpdate {
+            offerLauncherUpdate(availableLauncherUpdate)
+            return
+        }
         checkForLauncherUpdates(silent: false)
     }
 
@@ -2175,6 +2234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 guard let self else { return }
                 switch result {
                 case .success(.current):
+                    self.availableLauncherUpdate = nil
                     self.showUpdatePhase(.idle, status: "Установлена актуальная версия")
                     self.appendLog("Обновление лаунчера: установлена актуальная версия \(MCGLLauncherUpdater.currentVersion).")
                     if !silent {
@@ -2185,15 +2245,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                         alert.beginSheetModal(for: self.window)
                     }
                 case .success(.available(let release)):
-                    self.showUpdatePhase(.idle, status: "Доступна версия \(release.version)", title: "Скачать \(release.version)")
+                    self.showAvailableLauncherUpdate(release)
                     self.appendLog("Доступно обновление лаунчера: \(release.version).")
-                    self.offerLauncherUpdate(release)
+                    if !silent { self.offerLauncherUpdate(release) }
                 case .failure(let error):
                     self.showUpdatePhase(.idle, status: "Не удалось проверить GitHub")
                     self.appendLog("Проверка обновления лаунчера не удалась: \(error.localizedDescription)")
                     if !silent { self.showUpdateError(error.localizedDescription) }
                 }
             }
+        }
+    }
+
+    private func showAvailableLauncherUpdate(_ release: MCGLGitHubRelease, status: String? = nil) {
+        availableLauncherUpdate = release
+        showUpdatePhase(.available, status: status ?? "Доступна версия \(release.version)",
+                        title: "Скачать \(release.version)")
+    }
+
+    private func launcherDownloadDidFinish() {
+        DispatchQueue.main.async { [weak self] in
+            self?.showUpdatePhase(.verifying, status: "Проверка установочного файла…")
         }
     }
 
@@ -2241,7 +2313,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         installingLauncherUpdate = true
         showUpdatePhase(.downloading, status: "Загрузка версии \(release.version)…")
         refreshLaunchButton()
-        updater.prepareInstallation(release, installed: installed) { [weak self] result in
+        let task = updater.prepareInstallation(release, installed: installed, didDownload: { [weak self] in
+            self?.launcherDownloadDidFinish()
+        }) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else {
                     if case .success(let update) = result { update.discard() }
@@ -2281,11 +2355,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 }
             }
         }
+        trackLauncherDownload(task, size: release.installableDiskImage?.size)
     }
 
     private func finishLauncherUpdate(with error: Error) {
         installingLauncherUpdate = false
-        showUpdatePhase(.idle, status: "Ошибка обновления")
+        if let availableLauncherUpdate {
+            showAvailableLauncherUpdate(availableLauncherUpdate, status: "Ошибка обновления")
+        } else {
+            showUpdatePhase(.idle, status: "Ошибка обновления")
+        }
         refreshLaunchButton()
         appendLog("Не удалось обновить лаунчер: \(error.localizedDescription)")
         showUpdateError(error.localizedDescription)
@@ -2294,12 +2373,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     private func downloadLauncherUpdate(_ release: MCGLGitHubRelease) {
         showUpdatePhase(.downloading, status: "Загрузка версии \(release.version)…")
         appendLog("Загрузка DMG версии \(release.version) с GitHub…")
-        updater.download(release) { [weak self] result in
+        let task = updater.download(release, didDownload: { [weak self] in
+            self?.launcherDownloadDidFinish()
+        }) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
                 case .success(let diskImage):
-                    self.showUpdatePhase(.idle, status: "DMG сохранён в «Загрузки»")
+                    self.showAvailableLauncherUpdate(release, status: "DMG сохранён в «Загрузки»")
                     self.appendLog("Обновление загружено и проверено: \(diskImage.path)")
                     NSWorkspace.shared.open(diskImage)
                     let alert = NSAlert()
@@ -2308,12 +2389,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                     alert.addButton(withTitle: "Понятно")
                     alert.beginSheetModal(for: self.window)
                 case .failure(let error):
-                    self.showUpdatePhase(.idle, status: "Ошибка загрузки")
+                    self.showAvailableLauncherUpdate(release, status: "Ошибка загрузки")
                     self.appendLog("Не удалось загрузить обновление: \(error.localizedDescription)")
                     self.showUpdateError(error.localizedDescription)
                 }
             }
         }
+        trackLauncherDownload(task, size: release.diskImage?.size)
     }
 
     private func showUpdateError(_ message: String) {

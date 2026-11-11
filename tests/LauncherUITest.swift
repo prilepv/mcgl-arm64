@@ -160,14 +160,27 @@ struct LauncherUITest {
         let update = button("launcher-update")
         let github = button("launcher-github")
         let spinner = descendants(update).first { $0.identifier?.rawValue == "launcher-check-spinner" }!
-        let progress = descendants(update).first { $0.identifier?.rawValue == "launcher-download-progress" }!
+        let progress = descendants(update).compactMap { $0 as? NSProgressIndicator }
+            .first { $0.identifier?.rawValue == "launcher-download-progress" }!
         let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         for phase in AppDelegate.UpdatePhase.allCases {
             delegate.previewUpdatePhaseForTesting(phase)
-            precondition(update.isEnabled == (phase == .idle))
+            precondition(update.isEnabled == (phase == .idle || phase == .available))
+            precondition((update as? GalaxyContentButton)?.selectedAppearance == (phase == .available))
             precondition(spinner.isHidden == (!animate || phase != .checking))
-            precondition(progress.isHidden == (!animate || phase != .downloading))
+            precondition(progress.isHidden)
         }
+        delegate.previewUpdatePhaseForTesting(.downloading)
+        delegate.previewUpdateProgressForTesting(received: 20_000_000, total: 80_000_000)
+        precondition(!progress.isHidden && !progress.isIndeterminate && progress.doubleValue == 25)
+        precondition(update.accessibilityLabel()?.contains("25%") == true)
+        delegate.previewUpdateProgressForTesting(received: 80_000_000, total: 80_000_000)
+        precondition(progress.doubleValue == 100)
+        delegate.previewUpdateProgressForTesting(received: 20_000_000, total: -1)
+        precondition(progress.isIndeterminate && progress.isHidden == !animate)
+        precondition(update.toolTip?.hasPrefix("Скачано ") == true)
+        delegate.previewUpdatePhaseForTesting(.verifying)
+        precondition(progress.isHidden && !update.isEnabled)
         delegate.previewUpdatePhaseForTesting(.idle)
         for size in [AppDelegate.windowSize, window.contentMinSize] {
             delegate.previewProjectNewsForTesting([])

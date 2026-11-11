@@ -7,11 +7,20 @@ struct MCGLGitHubRelease: Decodable {
         let name: String
         let downloadURL: URL
         let digest: String?
+        let size: Int64?
+
+        init(name: String, downloadURL: URL, digest: String?, size: Int64? = nil) {
+            self.name = name
+            self.downloadURL = downloadURL
+            self.digest = digest
+            self.size = size
+        }
 
         enum CodingKeys: String, CodingKey {
             case name
             case downloadURL = "browser_download_url"
             case digest
+            case size
         }
     }
 
@@ -53,7 +62,7 @@ struct MCGLGitHubRelease: Decodable {
 
 final class MCGLLauncherUpdater {
     // The installed app is authoritative; the fallback is for standalone tools/tests.
-    static let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.8.2"
+    static let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.8.3"
     static let releasesPage = URL(string: "https://github.com/prilepv/mcgl-arm64/releases")!
     private static let latestReleaseAPI = URL(
         string: "https://api.github.com/repos/prilepv/mcgl-arm64/releases/latest")!
@@ -93,23 +102,25 @@ final class MCGLLauncherUpdater {
         }.resume()
     }
 
-    func download(_ release: MCGLGitHubRelease,
-                  completion: @escaping (Result<URL, Error>) -> Void) {
+    @discardableResult
+    func download(_ release: MCGLGitHubRelease, didDownload: @escaping () -> Void = {},
+                  completion: @escaping (Result<URL, Error>) -> Void) -> URLSessionDownloadTask? {
         guard let asset = release.diskImage else {
             completion(.failure(Self.error("В релизе нет установочного DMG.")))
-            return
+            return nil
         }
         var request = URLRequest(url: asset.downloadURL)
         request.setValue("MCGL-ARM64-Launcher/\(Self.currentVersion)",
                          forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 180
-        session.downloadTask(with: request) { temporaryURL, response, error in
+        let task = session.downloadTask(with: request) { temporaryURL, response, error in
             if let error { completion(.failure(error)); return }
             guard let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode), let temporaryURL else {
                 completion(.failure(Self.error("Не удалось загрузить DMG с GitHub.")))
                 return
             }
+            didDownload()
             do {
                 try Self.verifyDigest(asset.digest, file: temporaryURL)
                 let destination = try Self.availableDownloadURL(named: asset.name)
@@ -118,18 +129,22 @@ final class MCGLLauncherUpdater {
             } catch {
                 completion(.failure(error))
             }
-        }.resume()
+        }
+        task.resume()
+        return task
     }
 
+    @discardableResult
     func prepareInstallation(_ release: MCGLGitHubRelease, installed: URL,
-                             completion: @escaping (Result<MCGLPreparedLauncherUpdate, Error>) -> Void) {
+                             didDownload: @escaping () -> Void = {},
+                             completion: @escaping (Result<MCGLPreparedLauncherUpdate, Error>) -> Void) -> URLSessionDownloadTask? {
         guard let asset = release.installableDiskImage, Self.isNewer(release.version, than: Self.currentVersion) else {
             completion(.failure(Self.error("Для установки из лаунчера нужен новый релиз с SHA-256.")))
-            return
+            return nil
         }
         var request = URLRequest(url: asset.downloadURL)
         request.timeoutInterval = 180
-        session.downloadTask(with: request) { temporaryURL, response, error in
+        let task = session.downloadTask(with: request) { temporaryURL, response, error in
             if let error { completion(.failure(error)); return }
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
                   http.url?.scheme == "https",
@@ -139,12 +154,15 @@ final class MCGLLauncherUpdater {
                 completion(.failure(Self.error("Не удалось получить установочный пакет с GitHub.")))
                 return
             }
+            didDownload()
             completion(Result {
                 try Self.verifyDigest(asset.digest, file: temporaryURL)
                 return try MCGLPreparedLauncherUpdate.prepare(diskImage: temporaryURL,
                                                                version: release.version, installed: installed)
             })
-        }.resume()
+        }
+        task.resume()
+        return task
     }
 
     static func isNewer(_ candidate: String, than installed: String) -> Bool {

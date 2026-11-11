@@ -15,6 +15,9 @@ struct MCGLChangelogEntry {
 
 enum MCGLChangelog {
     static let entries: [MCGLChangelogEntry] = [
+        MCGLChangelogEntry(version: "1.8.3", date: "11 ноября 2026", title: "Обновление лаунчера", points: [
+            "Кнопка «Обновления» отмечает доступную версию и показывает фактический прогресс загрузки."
+        ]),
         MCGLChangelogEntry(version: "1.8.2", date: "11 ноября 2026", title: "Загрузка мира и выход", points: [
             "Исправлено зависание на экране загрузки мира в режиме Metal при вытеснении геометрии чанков из кэша.",
             "Исправлено зависание при выходе из игры."
