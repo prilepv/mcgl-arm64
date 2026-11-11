@@ -43,6 +43,7 @@ if [[ ${3:-} == --bgfx || ${3:-} == --independent ]]; then
     if grep -Eq 'fallback|unavailable|OpenGL 2.1 preflight' "$work/runtime.log"; then exit 1; fi
     if [[ ${3:-} == --independent ]]; then
         grep -q '^METAL_SCENE_MODEL_RECOVERY_PASS' "$work/runtime.log"
+        if rg -q 'held=.*mesh unavailable' "$work/runtime.log"; then exit 1; fi
         grep -q 'framebuffer=metal resized=480x320' "$work/runtime.log"
         grep -q 'game window has no OpenGL context' "$work/runtime.log"
         grep -q 'using bundled renderer for independent bgfx Metal' "$work/runtime.log"

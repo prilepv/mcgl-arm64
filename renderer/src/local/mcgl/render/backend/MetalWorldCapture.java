@@ -263,14 +263,17 @@ final class MetalWorldCapture {
         } catch (RuntimeException | LinkageError error) { disable(error); }
     }
 
-    void single(Mesh mesh, int mask, boolean supported) {
+    void single(Mesh mesh, MeshData source, int mask, boolean supported) {
         if (!active()) return;
         if (primarySurface()) frame.terrainAttempted = true;
         try {
             MetalWorldFrame.Pass pass = pass(1, supported);
             if (pass == null) return;
-            MetalWorldFrame.Draw draw = draw(pass, mesh, mask, raster.previewTexture(0),
-                    texture(1, pass, raster.previewTexture(1)));
+            int atlas = raster.previewTexture(0), light = texture(1, pass, raster.previewTexture(1));
+            MetalWorldFrame.Draw draw = MetalGameTarget.independent() && source != null
+                    && (mask & ~127) == 0 && GameTerrainFormat.LAYOUT.equals(source.layout())
+                    ? drawData(pass, source, mask, atlas, light, true)
+                    : draw(pass, mesh, mask, atlas, light);
             if (draw != null) {
                 state.matrices.copyModelView(model);
                 for (int i = 0; i < 16; i++) draw.model[i] = (float)model[i];

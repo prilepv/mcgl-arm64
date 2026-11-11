@@ -111,15 +111,24 @@ public class GameRenderer {
     }
     private final class Draw implements Operation,GameTerrainBatch.Recovery {
         Mesh mesh; final Mesh.Primitive primitive; final int mask;
+        final MeshData metalTerrainData;
         Draw(GameGeometry geometry, MeshPipeline.Usage usage) {
             Mesh shared=terrainBatchEnabled&&compiling!=null&&compiling.terrainOwner!=0?terrainBatch().create(geometry,this):null;
-            mesh=shared==null?context.meshes().create("game/geometry",geometry.mesh,usage):shared;primitive=geometry.primitive;mask=geometry.attributeMask;
-            if(shared==null&&worldCapture!=null&&compiling!=null&&compiling.terrainOwner!=0&&primitive==Mesh.Primitive.TRIANGLES)
-                worldCapture.remember(mesh,GameTerrainFormat.storage(geometry.mesh));
+            primitive = geometry.primitive;
+            mask = geometry.attributeMask;
+            boolean terrain = shared == null && worldCapture != null && compiling != null
+                    && compiling.terrainOwner != 0 && primitive == Mesh.Primitive.TRIANGLES;
+            MeshData packed = terrain ? GameTerrainFormat.storage(geometry.mesh) : geometry.mesh;
+            metalTerrainData = terrain && MetalGameTarget.independent() && GameTerrainFormat.LAYOUT.equals(packed.layout())
+                    ? packed : null;
+            mesh = shared == null ? context.meshes().create("game/geometry",
+                    metalTerrainData == null ? geometry.mesh : metalTerrainData, usage) : shared;
+            if (terrain && metalTerrainData == null)
+                worldCapture.remember(mesh, packed);
             else if (shared == null && worldCapture != null && usage == MeshPipeline.Usage.STATIC
-                    && primitive == Mesh.Primitive.TRIANGLES) worldCapture.rememberScene(mesh, geometry.mesh, mask);
+                    && !terrain && primitive == Mesh.Primitive.TRIANGLES) worldCapture.rememberScene(mesh, geometry.mesh, mask);
         }
-        public void draw() { drawMesh(mesh,primitive,mask); }
+        public void draw() { drawMesh(mesh, primitive, mask, metalTerrainData); }
         public Mesh source(){return mesh;}
         public void replace(Mesh replacement){Mesh previous=mesh;previous.close();mesh=replacement;if(metalTerrain!=null)metalTerrain.replace(previous,replacement);if(worldCapture!=null)worldCapture.replace(previous,replacement);}
         public void close(){if(terrainBatch!=null)terrainBatch.retiring(this);if(metalTerrain!=null)metalTerrain.forget(mesh);if(worldCapture!=null)worldCapture.forget(mesh);mesh.close();}
@@ -358,7 +367,7 @@ public class GameRenderer {
         flushText();
         if (worldCapture != null) {
             boolean triangles = primitive == Mesh.Primitive.TRIANGLES;
-            if (terrainReplayDepth > 0) worldCapture.single(mesh, mask, triangles && (effect == null || MetalGameTarget.independent()));
+            if (terrainReplayDepth > 0) worldCapture.single(mesh, source, mask, triangles && (effect == null || MetalGameTarget.independent()));
             else worldCapture.scene(mesh, source, mask, triangles);
         }
         if (!MetalGameTarget.independent()) {

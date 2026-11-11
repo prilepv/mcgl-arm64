@@ -110,6 +110,26 @@ typedef struct {
     int exit_code;
 } game_thread_context;
 
+static void bound_game_shutdown(int seconds, int exit_code) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * NSEC_PER_SEC),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        fprintf(stderr, "Runtime: game shutdown timed out.\n");
+        _Exit(exit_code);
+    });
+}
+
+@interface MCGLRuntimeApplication : NSApplication
+@end
+
+@implementation MCGLRuntimeApplication
+- (void)terminate:(id)sender {
+    // GLFW first forwards Quit to the game loop as a window close request.
+    static dispatch_once_t quit_requested;
+    dispatch_once(&quit_requested, ^{ bound_game_shutdown(8, 0); });
+    [super terminate:sender];
+}
+@end
+
 @interface MCGLRuntimeLifecycle : NSObject
 + (void)stopApplicationLoop;
 @end
@@ -240,7 +260,7 @@ int main(int argc, char **argv) {
     // AWT/AppKit state. The first macOS thread remains
     // in NSApplication's event loop; the Java game loop runs on a worker and
     // synchronously schedules LWJGL window operations back to this thread.
-    NSApplication *application = [NSApplication sharedApplication];
+    NSApplication *application = [MCGLRuntimeApplication sharedApplication];
     [application setActivationPolicy:NSApplicationActivationPolicyRegular];
     [application finishLaunching];
 
@@ -522,6 +542,7 @@ int main(int argc, char **argv) {
     pthread_join(game_thread, NULL);
 
     fprintf(stdout, "Runtime: MCGL DirectLauncher returned; Cocoa event loop stopped.\n");
+    bound_game_shutdown(5, game_context.exit_code);
     (*vm)->DestroyJavaVM(vm);
     [appkit_pool drain];
     return game_context.exit_code;

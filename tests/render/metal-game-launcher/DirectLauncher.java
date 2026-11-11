@@ -35,6 +35,8 @@ public final class DirectLauncher {
         System.setProperty("mcgl.metal.capture.warmup", "0");
         boolean bgfx = System.getenv("MCGL_BGFX_LIVE_LIBRARY") != null;
         boolean independent = "1".equals(System.getenv("MCGL_METAL_INDEPENDENT"));
+        // Each chunk exceeds this cache, including a raw fan that needs packing.
+        if (independent) System.setProperty("mcgl.metal.live.cacheBytes", "130");
         String limit = System.getenv("MCGL_FPS_LIMIT");
         if (limit != null && !limit.equals(System.getProperty("mcgl.fps.limit")))
             throw new AssertionError("Metal changed the configured FPS limit");
@@ -75,8 +77,8 @@ public final class DirectLauncher {
             g.glTexImage2D(GL11C.GL_TEXTURE_2D, 0, GL11C.GL_RGBA8, 1, 1, 0,
                     GL12C.GL_BGRA, GL12C.GL_UNSIGNED_INT_8_8_8_8_REV, pixel(90, 120, 200));
             g.glEnable(GL11C.GL_TEXTURE_2D);
-            int chunk = bgfx ? terrain(g, 0) : 0;
-            int alternate = independent ? terrain(g, .05f) : chunk;
+            int chunk = bgfx ? terrain(g, 0, GL11C.GL_QUADS) : 0;
+            int alternate = independent ? terrain(g, .05f, GL11C.GL_TRIANGLE_FAN) : chunk;
             ShaderProgram effect = independent
                     ? RenderSystem.shaders().create(new ShaderSources("test/high-graphics", "vertex", "fragment")) : null;
             int[] map = bgfx ? renderTarget(g, texture) : null;
@@ -185,7 +187,7 @@ public final class DirectLauncher {
         }
     }
 
-    private static int terrain(GameRenderCommands g, float shift) {
+    private static int terrain(GameRenderCommands g, float shift, int mode) {
         int id = g.glGenLists(1);
         g.beginOriginalChunk(id, 1);
         g.glNewList(id, GL11.GL_COMPILE);
@@ -199,7 +201,7 @@ public final class DirectLauncher {
             vertices[at + 4] = Float.floatToIntBits(i >= 2 ? 1 : 0);
             vertices[at + 5] = 0xffe6994c;
         }
-        g.raw(vertices, vertices.length, 4, GL11C.GL_QUADS, false, true, true, true, false, false);
+        g.raw(vertices, vertices.length, 4, mode, false, true, true, true, false, false);
         g.glEndList();
         g.finishOriginalChunk();
         return id;
