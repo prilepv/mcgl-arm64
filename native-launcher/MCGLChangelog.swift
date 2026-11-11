@@ -15,6 +15,9 @@ struct MCGLChangelogEntry {
 
 enum MCGLChangelog {
     static let entries: [MCGLChangelogEntry] = [
+        MCGLChangelogEntry(version: "1.8.4", date: "11 ноября 2026", title: "Ники аккаунтов", points: [
+            "Лаунчер теперь принимает ники Minecraft Galaxy с дефисами и точками."
+        ]),
         MCGLChangelogEntry(version: "1.8.3", date: "11 ноября 2026", title: "Обновление лаунчера", points: [
             "Кнопка «Обновления» отмечает доступную версию и показывает фактический прогресс загрузки."
         ]),

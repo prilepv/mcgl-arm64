@@ -49,8 +49,9 @@ struct AccountsTest {
             fails { try store.add(nickname: invalid) }
             fails { _ = try MCGLAccountService.request(nickname: invalid) }
         }
-        let second = try store.add(nickname: "  DemoBuilder  ", label: "Твинк")
-        precondition(store.selected?.id == second.id)
+        let second = try store.add(nickname: "  --__Demo-Builder.2__--  ", label: "Твинк")
+        precondition(store.selected?.id == second.id && second.nickname == "--__Demo-Builder.2__--")
+        fails { try store.add(nickname: "--__demo-builder.2__--") }
         try store.rename(second.id, label: "Строитель\n")
         precondition(store.selected?.label == "Строитель")
         let info = try MCGLAccountInfoParser.parse(Data(profileHTML.utf8), now: Date(timeIntervalSince1970: 1000))
@@ -98,9 +99,9 @@ struct AccountsTest {
             let parsed = try MCGLAccountInfoParser.parse(Data(profileHTML.replacingOccurrences(of: "Шахтер", with: name).utf8))
             precondition(parsed.professionIcon != nil)
         }
-        let request = try MCGLAccountService.request(nickname: "DemoMiner")
+        let request = try MCGLAccountService.request(nickname: second.nickname)
         precondition(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems == [
-            URLQueryItem(name: "v", value: "2.13"), URLQueryItem(name: "user", value: "DemoMiner")])
+            URLQueryItem(name: "v", value: "2.13"), URLQueryItem(name: "user", value: "--__Demo-Builder.2__--")])
 
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [InfoFixture.self]

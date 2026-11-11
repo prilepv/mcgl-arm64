@@ -46,7 +46,7 @@ enum MCGLAccountError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidNickname: return "Ник: от 1 до 64 латинских букв, цифр или знаков подчёркивания."
+        case .invalidNickname: return "Ник может содержать от 1 до 64 символов. Допустимы латинские буквы, цифры, подчёркивание, дефис и точка."
         case .duplicate: return "Этот аккаунт уже добавлен."
         case .limit: return "Можно сохранить до 30 аккаунтов."
         case .corruptStore: return "Не удалось прочитать список аккаунтов. Сохранённые данные не изменены."
@@ -95,7 +95,8 @@ final class MCGLAccountStore {
     }
 
     static func validNickname(_ nickname: String) -> Bool {
-        nickname.range(of: #"\A[A-Za-z0-9_]{1,64}\z"#, options: .regularExpression) != nil
+        // Registration accepts hyphens, and existing MCGL accounts can also contain dots.
+        nickname.range(of: #"\A[A-Za-z0-9_.-]{1,64}\z"#, options: .regularExpression) != nil
     }
 
     @discardableResult
