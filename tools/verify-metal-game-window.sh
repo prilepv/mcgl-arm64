@@ -42,6 +42,11 @@ if [[ ${3:-} == --bgfx || ${3:-} == --independent ]]; then
     grep -Eq '^\[MCGL bgfx live\] closed .*menus=[1-9][0-9]* worlds=[1-9][0-9]*' "$work/runtime.log"
     if grep -Eq 'fallback|unavailable|OpenGL 2.1 preflight' "$work/runtime.log"; then exit 1; fi
     if [[ ${3:-} == --independent ]]; then
+        awk '
+            /startup cover installed/ { covers++; cover = NR }
+            /first Metal frame presented; startup cover removed/ { reveals++; reveal = NR }
+            END { exit !(covers == 1 && reveals == 1 && cover < reveal) }
+        ' "$work/runtime.log"
         grep -q '^METAL_SCENE_MODEL_RECOVERY_PASS' "$work/runtime.log"
         if rg -q 'held=.*mesh unavailable' "$work/runtime.log"; then exit 1; fi
         grep -q 'framebuffer=metal resized=480x320' "$work/runtime.log"

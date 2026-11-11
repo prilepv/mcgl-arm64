@@ -24,6 +24,8 @@ public final class MetalGameTarget implements AutoCloseable {
         this.window = window;
         if (INDEPENDENT) {
             context = 0;
+            System.load(System.getenv("MCGL_BGFX_LIVE_LIBRARY"));
+            installStartupCover(window);
             System.out.println("[MCGL bgfx] game window has no OpenGL context");
             return;
         }
@@ -39,6 +41,8 @@ public final class MetalGameTarget implements AutoCloseable {
             } finally { CGLDestroyPixelFormat(format.get(0)); }
         }
     }
+
+    private static native void installStartupCover(long window);
 
     public void makeCurrent() {
         if (usesOpenGL() && CGLSetCurrentContext(context) != kCGLNoError) throw new IllegalStateException("Could not attach the offscreen context");

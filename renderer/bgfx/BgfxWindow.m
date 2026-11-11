@@ -1,7 +1,78 @@
 #import <Cocoa/Cocoa.h>
+#import <Metal/MTLDrawable.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <objc/runtime.h>
 #include <jni.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <stdint.h>
+
+static char startupCoverKey;
+
+// bgfx skips the onscreen drawable for an occluded window. Cover the visible
+// window until Metal has actually presented a frame underneath the cover.
+@interface MCGLStartupMetalLayer : CAMetalLayer
+- (instancetype)initWithStartupCover:(NSView *)cover;
+@end
+
+@implementation MCGLStartupMetalLayer {
+    __weak NSView *startupCover;
+    atomic_bool revealed;
+}
+
+- (instancetype)initWithStartupCover:(NSView *)cover {
+    self = [super init];
+    if (self) {
+        startupCover = cover;
+        atomic_init(&revealed, false);
+    }
+    return self;
+}
+
+- (id<CAMetalDrawable>)nextDrawable {
+    id<CAMetalDrawable> drawable = [super nextDrawable];
+    if (!atomic_load_explicit(&revealed, memory_order_relaxed)) {
+        [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
+            if (presented.presentedTime <= 0 || atomic_exchange_explicit(&self->revealed, true, memory_order_relaxed)) return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSView *cover = self->startupCover;
+                NSWindow *window = cover.window;
+                if (!window || objc_getAssociatedObject(window, &startupCoverKey) != cover) return;
+                [cover removeFromSuperview];
+                objc_setAssociatedObject(window, &startupCoverKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                fputs("[MCGL bgfx] first Metal frame presented; startup cover removed\n", stdout);
+                fflush(stdout);
+            });
+        }];
+    }
+    return drawable;
+}
+@end
+
+JNIEXPORT void JNICALL Java_local_mcgl_render_backend_MetalGameTarget_installStartupCover(JNIEnv *env, jclass cls, jlong handle) {
+    (void)env; (void)cls;
+    // GLFW constructs the game window on the AppKit main thread.
+    NSWindow *window = (__bridge NSWindow *)(void *)(uintptr_t)handle;
+    NSView *content = window.contentView;
+    NSView *cover = [[NSView alloc] initWithFrame:content.bounds];
+    cover.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    cover.wantsLayer = YES;
+    cover.layer.backgroundColor = [NSColor colorWithSRGBRed:0.06 green:0.05 blue:0.10 alpha:1].CGColor;
+    NSTextField *label = [NSTextField labelWithString:@"Запуск игры…"];
+    label.textColor = NSColor.whiteColor;
+    label.font = [NSFont systemFontOfSize:15 weight:NSFontWeightMedium];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    [cover addSubview:label];
+    [NSLayoutConstraint activateConstraints:@[
+        [label.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [label.centerYAnchor constraintEqualToAnchor:cover.centerYAnchor],
+    ]];
+    [content addSubview:cover positioned:NSWindowAbove relativeTo:nil];
+    objc_setAssociatedObject(window, &startupCoverKey, cover, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    fputs("[MCGL bgfx] startup cover installed\n", stdout);
+    fflush(stdout);
+}
 
 static jlong openWindow(jint width, jint height, BOOL preview) {
     __block NSWindow *window;
@@ -68,8 +139,9 @@ JNIEXPORT jlong JNICALL Java_local_mcgl_render_backend_BgfxTerrainStream_attachG
     NSWindow *window = (__bridge NSWindow *)(void *)(uintptr_t)handle;
     if (!window) return 0;
     dispatch_sync(dispatch_get_main_queue(), ^{
+        NSView *cover = objc_getAssociatedObject(window, &startupCoverKey);
         window.contentView.wantsLayer = YES;
-        window.contentView.layer = [CAMetalLayer layer];
+        window.contentView.layer = cover ? [[MCGLStartupMetalLayer alloc] initWithStartupCover:cover] : [CAMetalLayer layer];
         window.title = @"Minecraft Galaxy · bgfx Metal";
     });
     return (jlong)(uintptr_t)(__bridge_retained void *)window;

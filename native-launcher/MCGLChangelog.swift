@@ -15,7 +15,8 @@ struct MCGLChangelogEntry {
 
 enum MCGLChangelog {
     static let entries: [MCGLChangelogEntry] = [
-        MCGLChangelogEntry(version: "1.8.4", date: "11 ноября 2026", title: "Ники аккаунтов", points: [
+        MCGLChangelogEntry(version: "1.8.5", date: "11 ноября 2026", title: "Запуск Metal и ники", points: [
+            "При запуске Metal экран «Запуск игры…» скрывается после показа первого кадра меню.",
             "Лаунчер теперь принимает ники Minecraft Galaxy с дефисами и точками."
         ]),
         MCGLChangelogEntry(version: "1.8.3", date: "11 ноября 2026", title: "Обновление лаунчера", points: [
