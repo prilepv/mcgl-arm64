@@ -17,10 +17,11 @@ final class MCGLInstaller {
     private let jarExecutableURL: URL
     private let resolverLock = NSLock()
     private var resolvedAddressCache: [String: [String]] = [:]
-    private var activeCompatibilityPack: (pack: URL, official: URL)?
+    private var activeCompatibilityPack: (pack: URL, official: URL, local: Bool)?
+    private let packTransport: ((URL) throws -> Data)?
     // Separate from launcher version. LWJGL 3 requires fresh original JARs
     // before the existing game transforms and the final binding-only adapter.
-    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-5\n"
+    private let portMarker = "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-6\n"
     private let mirrors = [
         URL(string: "http://f1.mcgl.ru/mclient/")!,
         URL(string: "http://f3.mcgl.ru/mclient/")!,
@@ -41,13 +42,15 @@ final class MCGLInstaller {
          portSupportURL: URL,
          patchToolsURL: URL,
          javaExecutableURL: URL,
-         jarExecutableURL: URL) {
+         jarExecutableURL: URL,
+         packTransport: ((URL) throws -> Data)? = nil) {
         self.supportRootURL = supportRootURL
         self.gameDirectoryURL = gameDirectoryURL
         self.portSupportURL = portSupportURL
         self.patchToolsURL = patchToolsURL
         self.javaExecutableURL = javaExecutableURL
         self.jarExecutableURL = jarExecutableURL
+        self.packTransport = packTransport
     }
 
     func install(progress: @escaping (String) -> Void,
@@ -109,6 +112,7 @@ final class MCGLInstaller {
         let markerURL = gameDirectoryURL.appendingPathComponent(".arm64-port-version")
         let installedMarker = try? String(contentsOf: markerURL, encoding: .utf8)
         let needsPortRefresh = installedMarker != portMarker || !canLaunchSavedClient()
+        let needsReference = !fileManager.fileExists(atPath: officialReference.path)
         let portOwnedPaths = try portSupportPaths()
 
         progress(profileExists
@@ -127,7 +131,8 @@ final class MCGLInstaller {
             } else if entry.path == "bin/mcgl.jar" || entry.path == "bin/lwjgl_util.jar" {
                 // These installed JARs contain local bytecode transformations;
                 // their checksums intentionally differ from the official files.
-                requiresDownload = needsPortRefresh || previousHash != entry.md5
+                requiresDownload = needsPortRefresh || previousHash != entry.md5 ||
+                    (entry.path == "bin/mcgl.jar" && needsReference)
             } else if portOwnedPaths.contains(entry.path) {
                 // ARM64 replacements intentionally differ from the official
                 // Intel files.  Reinstall them from PortSupport below.
@@ -259,7 +264,8 @@ final class MCGLInstaller {
     func adoptPreviouslyPreparedClient() throws {
         guard !fileManager.fileExists(atPath: savedReceiptURL.path),
               let marker = try? String(contentsOf: gameDirectoryURL.appendingPathComponent(".arm64-port-version"), encoding: .utf8),
-              [portMarker, "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-4\n",
+              [portMarker, "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-5\n",
+               "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-4\n",
                "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-3\n",
                "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-2\n",
                "Minecraft Galaxy ARM64 bootstrap lwjgl3-game-original-core-17-stream-1\n",
@@ -679,23 +685,30 @@ final class MCGLInstaller {
         let classpath = patchToolsURL.path + ":" + asmJar.path
         try fileManager.moveItem(at: gameJar, to: original)
         defer { activeCompatibilityPack = nil }
-        let probe = try runProcess(executable: javaExecutableURL, arguments: [
-            "-cp", classpath, "MCGLClientCompatibility", "probe", original.path
-        ], captureStandardOutput: true)
-        if String(data: probe, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "SIGNED_PACK_REQUIRED" {
+        let requiresPack = try needsSignedPack(original, classpath: classpath)
+        let packs = MCGLCompatibilityPacks(cache: supportRootURL.appendingPathComponent("Compatibility/core-17"),
+                                           transport: packTransport)
+        var compare: ((String, URL) throws -> Void)?
+        if requiresPack {
             progress("Поиск подписанного пакета совместимости MCGL…")
             let client = try Self.sha256File(original)
-            let packs = MCGLCompatibilityPacks(cache: supportRootURL.appendingPathComponent("Compatibility/core-17"))
             do {
                 let pack = try packs.resolve(client: client) { candidate in
                     _ = try self.runProcess(executable: self.javaExecutableURL, arguments: [
                         "-cp", classpath, "MCGLCompatibilityPack", "verify", candidate.path, client
                     ])
                 }
-                activeCompatibilityPack = (pack, original)
+                activeCompatibilityPack = (pack, original, false)
                 progress("Подпись и версия пакета совместимости проверены.")
             } catch {
-                throw Self.compatibilityUnavailable("официальный клиент MCGL изменился и пока не поддерживается доступным пакетом совместимости. Пакет ещё не опубликован, недоступен или не прошёл проверку. Установленный клиент и настройки не изменены.")
+                progress("Подписанный пакет недоступен. Проверка локальной совместимости MCGL…")
+                do {
+                    compare = try prepareLocalCompatibility(original: original, gameRoot: gameRoot,
+                                                            work: workURL, classpath: classpath, packs: packs)
+                } catch {
+                    progress("Локальная совместимость MCGL: \(error.localizedDescription)")
+                    throw Self.compatibilityUnavailable("эту версию MCGL не удалось адаптировать автоматически. Для неё потребуется пакет совместимости. Установленный клиент и настройки не изменены.")
+                }
             }
         }
         do {
@@ -703,7 +716,7 @@ final class MCGLInstaller {
                 "-cp", classpath, "MCGLClientCompatibility", "normalize", original.path, gameJar.path
             ])
             try patchClient(in: gameRoot)
-            try adaptLWJGL(in: gameRoot)
+            try adaptLWJGL(in: gameRoot, compare: compare)
             _ = try runProcess(executable: javaExecutableURL, arguments: [
                 "-cp", classpath, "MCGLClientCompatibility", "restore", original.path, gameJar.path, restored.path
             ])
@@ -711,11 +724,123 @@ final class MCGLInstaller {
                 "-cp", classpath + ":" + gameRoot.appendingPathComponent("bin/lwjgl.jar").path,
                 "LWJGL3LinkageAudit", restored.path
             ])
+            if compare != nil {
+                try verifyLocalClient(original: original, restored: restored, staged: gameRoot, classpath: classpath)
+            }
             try fileManager.removeItem(at: gameJar)
             try fileManager.moveItem(at: restored, to: gameJar)
+            if compare == nil {
+                do { try rememberOfficialClient(original) }
+                catch { progress("Не удалось сохранить эталон совместимости MCGL: \(error.localizedDescription)") }
+            } else {
+                progress("Локальная совместимость MCGL проверена.")
+            }
         } catch {
             throw Self.compatibilityUnavailable("подготовка обновления MCGL не прошла проверку: \(error.localizedDescription). Установленный клиент и настройки не изменены.")
         }
+    }
+
+    private var officialReference: URL {
+        supportRootURL.appendingPathComponent("Compatibility/core-17/official-reference.jar")
+    }
+
+    private func needsSignedPack(_ original: URL, classpath: String) throws -> Bool {
+        let probe = try runProcess(executable: javaExecutableURL, arguments: [
+            "-cp", classpath, "MCGLClientCompatibility", "probe", original.path
+        ], captureStandardOutput: true)
+        return String(decoding: probe, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "SIGNED_PACK_REQUIRED"
+    }
+
+    private func rememberOfficialClient(_ original: URL) throws {
+        try fileManager.createDirectory(at: officialReference.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(contentsOf: original, options: .mappedIfSafe).write(to: officialReference, options: .atomic)
+    }
+
+    private func verifyLocalClient(original: URL, restored: URL, staged: URL, classpath: String) throws {
+        let libraries = ["Minecraft.jar", "bin/gson-2.8.5.jar"].map { path in
+            let candidate = staged.appendingPathComponent(path)
+            return fileManager.fileExists(atPath: candidate.path) ? candidate : gameDirectoryURL.appendingPathComponent(path)
+        }
+        let metal = patchToolsURL.deletingLastPathComponent().appendingPathComponent("Bgfx/lwjgl.jar")
+        var bindings = [staged.appendingPathComponent("bin/lwjgl.jar")]
+        if fileManager.fileExists(atPath: metal.path) { bindings.append(metal) }
+        for binding in bindings {
+            _ = try runProcess(executable: javaExecutableURL, arguments: [
+                "-Xmx1024m", "-cp", classpath, "ClientLinkageTest", original.path, restored.path,
+                libraries[0].path, binding.path, libraries[1].path
+            ])
+        }
+    }
+
+    private func prepareLocalCompatibility(original: URL, gameRoot: URL, work: URL, classpath: String,
+                                           packs: MCGLCompatibilityPacks) throws -> (String, URL) throws -> Void {
+        let referenceInfo = try? officialReference.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+        guard referenceInfo?.isRegularFile == true, referenceInfo?.isSymbolicLink != true,
+              (referenceInfo?.fileSize ?? Int.max) <= 32 * 1024 * 1024,
+              fileManager.fileExists(atPath: patchToolsURL.appendingPathComponent("LocalCompatibility.class").path) else {
+            throw installerError("для этой установки пока нет проверенного эталона")
+        }
+        let reference = work.appendingPathComponent("reference.jar")
+        try fileManager.copyItem(at: officialReference, to: reference)
+        let referenceSHA = try Self.sha256File(reference)
+        let referencePack: URL?
+        if try needsSignedPack(reference, classpath: classpath) {
+            referencePack = try packs.cached(client: referenceSHA) { pack in
+                _ = try self.runProcess(executable: self.javaExecutableURL, arguments: [
+                    "-cp", classpath, "MCGLCompatibilityPack", "verify", pack.path, referenceSHA
+                ])
+            }
+        } else {
+            referencePack = nil
+        }
+        let old = work.appendingPathComponent("reference-client")
+        let oldJar = old.appendingPathComponent("bin/mcgl.jar")
+        let oldNormalized = work.appendingPathComponent("reference-normalized.jar")
+        try fileManager.createDirectory(at: oldJar.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.copyItem(at: gameRoot.appendingPathComponent("bin/lwjgl.jar"),
+                                 to: old.appendingPathComponent("bin/lwjgl.jar"))
+        if let referencePack { activeCompatibilityPack = (referencePack, reference, false) }
+        _ = try runProcess(executable: javaExecutableURL, arguments: [
+            "-cp", classpath, "MCGLClientCompatibility", "normalize", reference.path, oldNormalized.path
+        ])
+        try fileManager.copyItem(at: oldNormalized, to: oldJar)
+        try patchClient(in: old)
+        try adaptLWJGL(in: old) { stage, jar in
+            try self.fileManager.copyItem(at: jar, to: work.appendingPathComponent("reference-\(stage).jar"))
+        }
+
+        activeCompatibilityPack = nil
+        guard try original.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max <= 32 * 1024 * 1024 else {
+            throw installerError("официальный клиент слишком велик для локальной проверки")
+        }
+        _ = try runProcess(executable: javaExecutableURL, arguments: [
+            "-Xmx1024m", "-cp", classpath, "LocalCompatibility", original.path, work.path, oldNormalized.path
+        ])
+        let client = try Self.sha256File(original)
+        let mapping = work.appendingPathComponent("mapping.tsv")
+        let guards = patchToolsURL.appendingPathComponent("compatibility-guards.txt")
+        var aliases = Set<String>()
+        let compare: (String, URL) throws -> Void = { stage, candidate in
+            // Derive aliases under the reference's authenticated guard IDs.
+            self.activeCompatibilityPack = referencePack.map { ($0, reference, false) }
+            let report = work.appendingPathComponent("aliases-\(stage).tsv")
+            _ = try self.runProcess(executable: self.javaExecutableURL, arguments: [
+                "-Xmx1024m", "-cp", classpath, "GuardDelta",
+                work.appendingPathComponent("reference-\(stage).jar").path,
+                candidate.path, guards.path, report.path
+            ])
+            aliases.formUnion(try String(contentsOf: report, encoding: .utf8).split(separator: "\n").map(String.init))
+            let combined = work.appendingPathComponent("checked-aliases.tsv")
+            try aliases.sorted().joined(separator: "\n").write(to: combined, atomically: true, encoding: .utf8)
+            let payload = work.appendingPathComponent("local-\(stage).zip")
+            self.activeCompatibilityPack = nil
+            _ = try self.runProcess(executable: self.javaExecutableURL, arguments: [
+                "-cp", classpath, "CreateCompatibilityPack", client, mapping.path, combined.path, payload.path
+            ])
+            self.activeCompatibilityPack = (payload, original, true)
+        }
+        try compare("normalized", work.appendingPathComponent("normalized.jar"))
+        return compare
     }
 
     private func patchClient(in gameRoot: URL) throws {
@@ -788,7 +913,7 @@ final class MCGLInstaller {
         try fileManager.moveItem(at: optimizedJar, to: gameJar)
     }
 
-    private func adaptLWJGL(in gameRoot: URL) throws {
+    private func adaptLWJGL(in gameRoot: URL, compare: ((String, URL) throws -> Void)? = nil) throws {
         let asmJar = patchToolsURL.appendingPathComponent("asm-debug-all.jar")
         for tool in ["PatchMCGLLwjgl3.class", "LWJGL3LinkageAudit.class", "PatchMCGLRenderer.class", "PatchMCGLChunks.class", "PatchMCGLGame.class", "render-commands.txt"] {
             guard fileManager.fileExists(atPath: patchToolsURL.appendingPathComponent(tool).path) else {
@@ -812,10 +937,12 @@ final class MCGLInstaller {
             ])
             var adapted = rendered
             if name == "mcgl" {
+                try compare?("rendered", rendered)
                 let chunks = gameRoot.appendingPathComponent("bin/\(name).chunks.jar")
                 _ = try runProcess(executable: javaExecutableURL, arguments: [
                     "-cp", toolClasspath, "PatchMCGLChunks", rendered.path, chunks.path
                 ])
+                try compare?("chunks", chunks)
                 adapted = chunks
             }
             let game = gameRoot.appendingPathComponent("bin/\(name).game-core.jar")
@@ -844,19 +971,18 @@ final class MCGLInstaller {
         process.executableURL = executable
         if executable.standardizedFileURL == javaExecutableURL.standardizedFileURL,
            let selected = activeCompatibilityPack {
-            process.arguments = ["-Dmcgl.compat.pack=\(selected.pack.path)",
+            let property = selected.local ? "local" : "pack"
+            process.arguments = ["-Dmcgl.compat.\(property)=\(selected.pack.path)",
                                  "-Dmcgl.compat.official=\(selected.official.path)"] + arguments
         } else { process.arguments = arguments }
         let output = Pipe()
-        let errors = Pipe()
         process.standardOutput = output
-        process.standardError = errors
+        process.standardError = captureStandardOutput ? FileHandle.nullDevice : output
         try process.run()
         let outputData = output.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errors.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            let detail = String(data: errorData + outputData, encoding: .utf8)?
+            let detail = String(data: outputData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if detail?.contains("MCGL_UNSUPPORTED_CLIENT:") == true {
                 throw installerError("официальный клиент MCGL изменился и пока не поддерживается этой версией ARM64-лаунчера. Требуется обновление лаунчера; установленный клиент и настройки не изменены.")
@@ -935,21 +1061,26 @@ final class MCGLCompatibilityPacks {
         }
     }
 
+    func cached(client: String, verifyPayload: (URL) throws -> Void) throws -> URL {
+        guard client.count == 64, client.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+            throw Self.failure("Некорректный идентификатор пакета.")
+        }
+        let target = cache.appendingPathComponent(client + ".pack")
+        let size = try target.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+        guard size.isRegularFile == true, size.isSymbolicLink != true, (size.fileSize ?? Int.max) <= Self.limit else {
+            throw Self.failure("Некорректный файл кэша совместимости.")
+        }
+        try Self.validateEnvelope(Data(contentsOf: target))
+        try verifyPayload(target)
+        return target
+    }
+
     func resolve(client: String, verifyPayload: (URL) throws -> Void) throws -> URL {
         guard client.count == 64, client.allSatisfy({ "0123456789abcdef".contains($0) }), base.scheme == "https" else {
             throw Self.failure("Некорректный адрес или идентификатор пакета.")
         }
+        if let verified = try? cached(client: client, verifyPayload: verifyPayload) { return verified }
         let fm = FileManager.default, target = cache.appendingPathComponent(client + ".pack")
-        if fm.fileExists(atPath: target.path) {
-            do {
-                let size = try target.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
-                guard size.isRegularFile == true, size.isSymbolicLink != true, (size.fileSize ?? Int.max) <= Self.limit else {
-                    throw Self.failure("Некорректный файл кэша совместимости.")
-                }
-                try Self.validateEnvelope(Data(contentsOf: target)); try verifyPayload(target)
-                return target
-            } catch { /* A corrupt cache must not suppress a fresh verified download. */ }
-        }
         let url = base.appendingPathComponent(client + ".pack")
         let data = try transport?(url) ?? BoundedPackRequest.fetch(url)
         try Self.validateEnvelope(data)

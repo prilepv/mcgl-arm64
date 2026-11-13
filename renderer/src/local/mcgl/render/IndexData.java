@@ -51,6 +51,28 @@ public final class IndexData {
         for (int i = 0; i < copy.length; i++) copy[i] = values.get(values.position() + i);
         return new IndexData(Type.UINT32, copy);
     }
+    /** Non-indexed streams use a shared immutable sequence of vertex indices. */
+    public static IndexData sequential(int count) {
+        if (count < 0) throw new IllegalArgumentException("Negative index count");
+        if (count <= 65536) {
+            ByteBuffer prefix = SequentialIndices.SHORTS.asReadOnlyBuffer();
+            prefix.limit(count * Type.UINT16.bytes);
+            return new IndexData(Type.UINT16, count, count - 1, prefix);
+        }
+        ByteBuffer data = ByteBuffer.allocateDirect(Math.multiplyExact(count, Type.UINT32.bytes)).order(ByteOrder.nativeOrder());
+        for (int i = 0; i < count; i++) data.putInt(i);
+        data.flip();
+        return new IndexData(Type.UINT32, count, count - 1, data);
+    }
+    private static final class SequentialIndices {
+        static final ByteBuffer SHORTS = build();
+        private static ByteBuffer build() {
+            ByteBuffer data = ByteBuffer.allocateDirect(65536 * Type.UINT16.bytes).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < 65536; i++) data.putShort((short)i);
+            data.flip();
+            return data.asReadOnlyBuffer();
+        }
+    }
     /** Each ordered convex quad becomes (0,1,2),(0,2,3); does not sort translucent faces. */
     public static IndexData quads(int vertexCount) {
         if (vertexCount < 0 || vertexCount % 4 != 0) throw new IllegalArgumentException("Quads require groups of four vertices");

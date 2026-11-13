@@ -4,9 +4,14 @@ import Foundation
 struct ChangelogTest {
     static func main() {
         let entries = MCGLChangelog.entries
-        precondition(entries.map(\.version) == ["1.8.5", "1.8.3", "1.8.2", "1.8.1", "1.8.0", "1.7.5", "1.7.4", "1.7.3", "1.7.2", "1.7.1", "1.7.0", "1.6.7", "1.6.6", "1.6.5", "1.6.4"])
+        precondition(entries.map(\.version) == ["1.8.6", "1.8.5", "1.8.3", "1.8.2", "1.8.1", "1.8.0", "1.7.5", "1.7.4", "1.7.3", "1.7.2", "1.7.1", "1.7.0", "1.6.7", "1.6.6", "1.6.5", "1.6.4"])
         precondition(entries.first { $0.version == "1.7.5" }?.points == ["Исправлен запуск игры после обновления официального клиента MCGL."])
-        precondition(entries.first?.points == ["При запуске Metal экран «Запуск игры…» скрывается после показа первого кадра меню.", "Лаунчер теперь принимает ники Minecraft Galaxy с дефисами и точками."])
+        precondition(entries.first?.points == [
+            "Лаунчер пробует адаптировать обновления MCGL, если подписанный пакет совместимости ещё недоступен.",
+            "Снижена нагрузка рендера Metal.",
+            "Исправлены сбои при отрисовке моделей и выключении проектора.",
+            "Исправлена маленькая иконка приложения. В журнале появилась кнопка «Скопировать»."
+        ])
         precondition(MCGLLauncherUpdater.currentVersion == entries.first!.version)
         for (index, entry) in entries.enumerated() {
             precondition(!entry.date.isEmpty && !entry.title.isEmpty)
@@ -26,6 +31,6 @@ struct ChangelogTest {
         preferences.lastReadChangelogVersion = "1.7.5"
         precondition(MCGLLauncherPreferences(defaults: defaults).lastReadChangelogVersion == "1.7.5")
         precondition(preferences.maximumMemoryMB == 4096 && preferences.fpsLimit == 144)
-        print("CHANGELOG_PASS fifteen public releases, factual release notes, descending versions, exact HTTPS links, offline data, independent read marker")
+        print("CHANGELOG_PASS sixteen public releases, factual release notes, descending versions, exact HTTPS links, offline data, independent read marker")
     }
 }

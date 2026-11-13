@@ -141,7 +141,9 @@ final class MetalWorldLive {
             int submitted = 0, transforms = 0, previous = 0, rejected = 0, menus = 0, worlds = 0;
             int previousWidth = 0, previousHeight = 0;
             boolean previousMenu = false, previousWorldTarget = false;
+            boolean diagnostics = Boolean.getBoolean("mcgl.graphics.profile");
             long opened = System.nanoTime(), nextPolicy = opened;
+            long nextReport = opened;
             while (!closed) {
                 long now = System.nanoTime();
                 if (attached && now >= nextPolicy) {
@@ -162,7 +164,8 @@ final class MetalWorldLive {
                         previousWorldTarget = frame.worldFromTarget;
                         previousWidth = frame.width;
                         previousHeight = frame.height;
-                        if (++submitted == 1 || submitted % 120 == 0 || attached && changed) {
+                        if (++submitted == 1 || attached && changed || diagnostics && now >= nextReport) {
+                            nextReport = now + 5_000_000_000L;
                             System.out.println("[MCGL bgfx live] submitted=" + submitted + " transforms=" + transforms
                                     + " draws=" + frame.drawCount() + " " + sink.uploads()
                                     + (attached ? " menu=" + frame.menu + " scene=" + frame.sceneDraws

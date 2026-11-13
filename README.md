@@ -5,13 +5,13 @@
 <h1 align="center">Minecraft Galaxy ARM64</h1>
 
 <p align="center">
-  Неофициальный нативный порт для Apple Silicon · 1.8.5
+  Неофициальный нативный порт для Apple Silicon · 1.8.6
   <br>Java 21 · LWJGL 3 · Metal / OpenGL · macOS Spaces
 </p>
 
 <p align="center">
   <a href="https://github.com/prilepv/mcgl-arm64/releases/latest"><strong>Скачать для Mac</strong></a>
-  · <a href="docs/RELEASE-NOTES-1.8.5.md">Что нового</a>
+  · <a href="docs/RELEASE-NOTES-1.8.6.md">Что нового</a>
   · <a href="https://github.com/prilepv/mcgl-arm64/issues">Сообщить о проблеме</a>
 </p>
 
@@ -20,6 +20,13 @@ Minecraft Galaxy на Mac с Apple Silicon, без Rosetta и отдельной
 Это неофициальный порт, не продукт разработчиков Minecraft или Minecraft Galaxy.
 
 ![Главная лаунчера Minecraft Galaxy ARM64 1.8.0](docs/screenshots/1.8.0/launcher-play.png)
+
+## 1.8.6
+
+- Лаунчер пробует адаптировать обновления MCGL, если подписанный пакет совместимости ещё недоступен.
+- Снижена нагрузка рендера Metal.
+- Исправлены сбои при отрисовке моделей и выключении проектора.
+- Исправлена маленькая иконка приложения. В журнале появилась кнопка «Скопировать».
 
 ## 1.8.5
 
@@ -170,6 +177,6 @@ macOS, версию порта и шаги воспроизведения. Дл�
 Собственный код — [MIT](LICENSE), сторонние компоненты сохраняют свои лицензии.
 Minecraft и Minecraft Galaxy принадлежат соответствующим правообладателям.
 
-История: [1.8.5](docs/RELEASE-NOTES-1.8.5.md) · [1.8.3](docs/RELEASE-NOTES-1.8.3.md) · [1.8.2](docs/RELEASE-NOTES-1.8.2.md) · [1.8.1](docs/RELEASE-NOTES-1.8.1.md) · [1.8.0](docs/RELEASE-NOTES-1.8.0.md) · [1.7.5](docs/RELEASE-NOTES-1.7.5.md) · [1.7.4](docs/RELEASE-NOTES-1.7.4.md) · [1.7.3](docs/RELEASE-NOTES-1.7.3.md) · [1.7.2](docs/RELEASE-NOTES-1.7.2.md) · [1.7.1](docs/RELEASE-NOTES-1.7.1.md) · [1.7.0](docs/RELEASE-NOTES-1.7.0.md) · [1.6.7](docs/RELEASE-NOTES-1.6.7.md) ·
+История: [1.8.6](docs/RELEASE-NOTES-1.8.6.md) · [1.8.5](docs/RELEASE-NOTES-1.8.5.md) · [1.8.3](docs/RELEASE-NOTES-1.8.3.md) · [1.8.2](docs/RELEASE-NOTES-1.8.2.md) · [1.8.1](docs/RELEASE-NOTES-1.8.1.md) · [1.8.0](docs/RELEASE-NOTES-1.8.0.md) · [1.7.5](docs/RELEASE-NOTES-1.7.5.md) · [1.7.4](docs/RELEASE-NOTES-1.7.4.md) · [1.7.3](docs/RELEASE-NOTES-1.7.3.md) · [1.7.2](docs/RELEASE-NOTES-1.7.2.md) · [1.7.1](docs/RELEASE-NOTES-1.7.1.md) · [1.7.0](docs/RELEASE-NOTES-1.7.0.md) · [1.6.7](docs/RELEASE-NOTES-1.6.7.md) ·
 [1.6.6](docs/RELEASE-NOTES-1.6.6.md) · [1.6.5](docs/RELEASE-NOTES-1.6.5.md) ·
 [1.6.4](docs/RELEASE-NOTES-1.6.4.md).

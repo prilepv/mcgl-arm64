@@ -40,6 +40,8 @@ public final class PatchMCGLGame implements Opcodes {
                 if(node.name.equals("net/A/U/H")){patch.chunk(node,tess);special=true;}
                 if(node.name.matches("net/A/U/Ooo0O{100,}")){patch.world(node);special=true;}
                 if(node.name.equals("net/A/U/E/C")||node.name.equals("net/A/U/E/oOOO")){patch.font(node);special=true;}
+                if(client && node.name.equals("net/A/tile/E")){avoidNestedTileList(node);special=true;}
+                if(client && node.name.equals("net/A/tile/TextDisplay")){stopProjectorCooperatively(node);special=true;}
                 for(MethodNode method:node.methods) {
                     if(method.name.equals("mcglChunkLegacyDraw"))continue; // unreachable original draw, retained for audit
                     for(AbstractInsnNode instruction:method.instructions.toArray()) {
@@ -78,6 +80,80 @@ public final class PatchMCGLGame implements Opcodes {
                 }Files.move(temporary,output);
             }finally{Files.deleteIfExists(temporary);}
             System.out.println("GAME_ADAPTER_PASS classes="+changed.size()+" retained="+retained+" calls="+patch.calls+" windows="+patch.windows+" effects="+patch.effects+" accumulators="+patch.accumulators+" chunks="+patch.chunks+" worlds="+patch.worlds+" fonts="+patch.fonts+" weather="+patch.weather+" chunk-policy="+(patch.originalChunks?"original-cache":"global-face"));
+        }
+    }
+    private static void avoidNestedTileList(ClassNode node) throws IOException {
+        MethodNode renderer = null;
+        JumpInsnNode cacheGuard = null;
+        for (MethodNode method : node.methods) {
+            JumpInsnNode lastIfNotEqual = null;
+            for (AbstractInsnNode ins : method.instructions.toArray()) {
+                if (ins.getOpcode() == IFNE) lastIfNotEqual = (JumpInsnNode)ins;
+                if (!(ins instanceof MethodInsnNode)) continue;
+                MethodInsnNode call = (MethodInsnNode)ins;
+                if (!call.name.equals("glNewList") || !call.desc.equals("(II)V") && !call.desc.equals("(IIZ)V")) continue;
+                require(renderer == null && lastIfNotEqual != null, "Ambiguous tile model cache");
+                renderer = method;
+                cacheGuard = lastIfNotEqual;
+            }
+        }
+        require(renderer != null, "Missing tile model cache");
+        AbstractInsnNode branch = cacheGuard.label.getNext();
+        while (branch != null && branch.getOpcode() < 0) branch = branch.getNext();
+        require(branch instanceof VarInsnNode && branch.getOpcode() == ALOAD && ((VarInsnNode)branch).var == 9,
+                "Changed tile model fallback");
+        MethodNode guard = new MethodNode();
+        game(guard);
+        guard.visitMethodInsn(INVOKEINTERFACE, COMMANDS, "compilingModel", "()Z");
+        guard.instructions.add(new JumpInsnNode(IFNE, cacheGuard.label));
+        renderer.instructions.insert(cacheGuard, guard.instructions);
+    }
+
+    private static void stopProjectorCooperatively(ClassNode node) throws IOException {
+        require(node.superName.equals("java/lang/Thread"), "Changed projector thread");
+        MethodNode run = method(node, "run", "()V"), shutdown = method(node, "shutdown", "()V");
+        FieldInsnNode running = null;
+        for (AbstractInsnNode ins : run.instructions.toArray()) {
+            if (ins.getOpcode() == GETFIELD && ((FieldInsnNode)ins).desc.equals("Z")) {
+                running = (FieldInsnNode)ins;
+                break;
+            }
+        }
+        require(running != null && running.owner.equals(node.name) && running.getNext().getOpcode() == IFEQ,
+                "Changed projector run condition");
+        boolean found = false;
+        for (FieldNode field : node.fields) if (field.name.equals(running.name) && field.desc.equals("Z")) {
+            field.access |= ACC_VOLATILE;
+            found = true;
+        }
+        require(found, "Missing projector running flag");
+        MethodInsnNode stop = null, interrupt = null;
+        for (AbstractInsnNode ins : shutdown.instructions.toArray()) {
+            if (!(ins instanceof MethodInsnNode)) continue;
+            MethodInsnNode call = (MethodInsnNode)ins;
+            if (!call.desc.equals("()V") || !(call.owner.equals(node.name) || call.owner.equals(node.superName))) continue;
+            if (call.name.equals("stop")) stop = call;
+            if (call.name.equals("interrupt")) interrupt = call;
+        }
+        require(stop != null && interrupt != null && stop.getPrevious().getOpcode() == ALOAD
+                && interrupt.getPrevious().getOpcode() == ALOAD, "Changed projector shutdown");
+        InsnList cancel = new InsnList();
+        cancel.add(new VarInsnNode(ALOAD, 0));
+        cancel.add(new InsnNode(ICONST_0));
+        cancel.add(new FieldInsnNode(PUTFIELD, node.name, running.name, "Z"));
+        shutdown.instructions.insertBefore(interrupt.getPrevious(), cancel);
+        shutdown.instructions.remove(stop.getPrevious());
+        shutdown.instructions.remove(stop);
+        // The worker can still be leaving a script callback. Keep its lock stable.
+        for (AbstractInsnNode ins : shutdown.instructions.toArray()) {
+            if (ins.getOpcode() != PUTFIELD || !((FieldInsnNode)ins).desc.equals("Ljava/util/concurrent/locks/Lock;")) continue;
+            AbstractInsnNode constructor = ins.getPrevious(), duplicate = constructor.getPrevious();
+            AbstractInsnNode allocation = duplicate.getPrevious(), receiver = allocation.getPrevious();
+            require(constructor instanceof MethodInsnNode && duplicate.getOpcode() == DUP
+                    && allocation instanceof TypeInsnNode && allocation.getOpcode() == NEW
+                    && receiver.getOpcode() == ALOAD, "Changed projector lock reset");
+            for (AbstractInsnNode reset : new AbstractInsnNode[]{receiver, allocation, duplicate, constructor, ins})
+                shutdown.instructions.remove(reset);
         }
     }
     private String owner(String owner,String name,String descriptor,boolean isStatic)throws IOException {

@@ -451,6 +451,7 @@ int main(int argc, char **argv) {
     const char *graphics_diagnostics = getenv("MCGL_GRAPHICS_DIAGNOSTICS");
     if (graphics_diagnostics != NULL && strcmp(graphics_diagnostics, "1") == 0) {
         ADD_VM_OPTION("-Dmcgl.graphics.profile=true");
+        ADD_VM_OPTION("-Xlog:gc,safepoint:stdout:time,uptime,level,tags");
         fprintf(stdout,
                 "Runtime: graphics frame diagnostics enabled (rendering is unchanged).\n");
     } else {

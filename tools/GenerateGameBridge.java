@@ -13,7 +13,7 @@ public final class GenerateGameBridge {
         Path output=Paths.get(args[1]);if(Files.exists(output))throw new IOException("Game bridge output exists");
         Map<String,StringBuilder> families=new TreeMap<String,StringBuilder>();
         StringBuilder contract=start(ROOT,"public interface GameRenderCommands");
-        contract.append("    void check();\n    boolean insideBeginEnd();\n    void abandon();\n    void abortModel();\n")
+        contract.append("    void check();\n    boolean insideBeginEnd();\n    boolean compilingModel();\n    void abandon();\n    void abortModel();\n")
                 .append("    void selectEffect(ShaderProgram program);\n    long drawCalls();\n    long rawBatches();\n    long submittedVertices();\n")
                 .append("    int cachedModels();\n    long cachedModelDraws();\n    void glNewList(int name, int mode, boolean terrain);\n")
                 .append("    long transientMeshCreations();\n    int transientMeshCount();\n    long transientMeshBytes();\n")
@@ -32,6 +32,7 @@ public final class GenerateGameBridge {
                 .append("    GuardedGameRenderCommands(RenderContext context, GameRenderCommands target) { this.context=context; this.target=target; }\n")
                 .append("    public void check() { context.checkOwner(); target.check(); }\n")
                 .append("    public boolean insideBeginEnd() { context.checkOwner(); return target.insideBeginEnd(); }\n")
+                .append("    public boolean compilingModel() { context.checkOwner(); return target.compilingModel(); }\n")
                 .append("    public void abandon() { if (!context.isClosed()) throw new IllegalStateException(\"Live game context cannot be abandoned\"); target.abandon(); }\n")
                 .append("    public void abortModel() { context.checkOwner(); target.abortModel(); }\n")
                 .append("    public void selectEffect(ShaderProgram p) { context.checkOwner(); target.selectEffect(p); }\n")

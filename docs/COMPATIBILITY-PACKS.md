@@ -4,7 +4,7 @@ The launcher can fetch reviewed, data-only compatibility information independent
 of application releases. This reduces application updates when MCGL changes its
 obfuscated class names or string keys. New rendering features or changed algorithms
 can still require a new application build. Packs are published after review and
-testing; an unknown client is never accepted automatically.
+testing. Clients without a signed pack must pass the local checks below.
 
 The current engine ABI is `core-17`. Delivery uses the separate `compatibility`
 branch of this repository, at `v1/core-17/<official-client-sha256>.pack`.
@@ -45,3 +45,19 @@ User settings are excluded from the receipt so normal settings changes remain va
 
 Signing is an authorization step, not evidence that a mapping is correct. Gameplay
 testing remains necessary, particularly when upstream changes rendering behavior.
+
+## Local fallback
+
+The installer retains the original JAR after staging a client with a bundled
+profile or authenticated pack. If a later client has no available signed pack,
+the launcher can infer a staging mapping from that reference. It rejects
+conflicts, checks an exact round trip, and accepts new aliases only when the
+guarded methods differ by a supported XOR string key change. The regular
+patches, name restoration, and linkage audits still have to succeed before
+the staged update is installed. Locally generated profiles stay in the
+temporary directory and never replace the trusted reference or enter the
+downloaded pack cache.
+
+The fallback needs a previously staged trusted reference. It can decline an
+update with incompatible bytecode and cannot verify live server or rendering
+behavior. The signed pack workflow still handles those releases.

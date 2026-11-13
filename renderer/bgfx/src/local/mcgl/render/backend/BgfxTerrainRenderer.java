@@ -3,6 +3,7 @@ package local.mcgl.render.backend;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -15,7 +16,10 @@ import java.util.Set;
 import java.util.Collections;
 import local.mcgl.render.IndexData;
 import local.mcgl.render.MeshData;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.bgfx.BGFXMemory;
+import org.lwjgl.bgfx.BGFXTransientIndexBuffer;
+import org.lwjgl.bgfx.BGFXTransientVertexBuffer;
 import org.lwjgl.bgfx.BGFXVertexLayout;
 import static org.lwjgl.bgfx.BGFX.*;
 
@@ -24,6 +28,7 @@ final class BgfxTerrainRenderer implements AutoCloseable {
     private static final long GEOMETRY_BUDGET = 320L << 20;
     private static final long PAGE_BYTES = 8L << 20;
     private static final int MAX_RETAINED_PAGES = 256;
+    private static final int COMPACTION_HEADROOM = 32;
     private static final int RETAINED_FRAMES = 60;
     private static final long TARGET_PIXEL_BUDGET = 16L << 20;
     private static final int MAX_TARGETS = 32;
@@ -63,7 +68,15 @@ final class BgfxTerrainRenderer implements AutoCloseable {
     private final Map<MeshData, GpuMesh> meshes = new IdentityHashMap<>();
     private final Map<MetalWorldFrame.Texture, Short> textures = new IdentityHashMap<>();
     private final Map<MetalWorldFrame.Texture, GpuTarget> targets = new IdentityHashMap<>();
-    private final float[] mask = new float[4];
+    private final FloatBuffer mask = BufferUtils.createFloatBuffer(4);
+    private final FloatBuffer materialData = BufferUtils.createFloatBuffer(MATERIAL_VECTORS * 4);
+    private final FloatBuffer offsetData = BufferUtils.createFloatBuffer(4);
+    private final FloatBuffer modelData = BufferUtils.createFloatBuffer(16);
+    private final BGFXTransientVertexBuffer[] streamVertices = new BGFXTransientVertexBuffer[2];
+    private final BGFXTransientIndexBuffer[] streamIndices = new BGFXTransientIndexBuffer[2];
+    private int[] streamFirstVertex, streamFirstIndex;
+    int matrixUploads, stateUploads;
+    long streamPages;
     private short offsetProgram = BGFX_INVALID_HANDLE, polygonOffset = BGFX_INVALID_HANDLE;
     private short program = BGFX_INVALID_HANDLE, terrain = BGFX_INVALID_HANDLE, drawState = BGFX_INVALID_HANDLE;
     private short atlasSampler = BGFX_INVALID_HANDLE, lightSampler = BGFX_INVALID_HANDLE, white = BGFX_INVALID_HANDLE;
@@ -75,7 +88,8 @@ final class BgfxTerrainRenderer implements AutoCloseable {
     private int[] views, stencils;
     private int[][] clips;
     private long residentGeometry;
-    private int residentPages;
+    private final List<GeometryPage> geometryPages = new ArrayList<>();
+    long geometryRepacks, geometryCompactions;
     private long generation;
     long meshUploads, textureUploads, pageUploads, targetAllocations, retainedUploads;
 
@@ -91,6 +105,12 @@ final class BgfxTerrainRenderer implements AutoCloseable {
         try {
             if (bgfx_get_renderer_type() != BGFX_RENDERER_TYPE_METAL)
                 throw new IllegalStateException("Terrain rendering requires bgfx Metal");
+            if (gameWindow) {
+                for (int slot = 0; slot < streamVertices.length; slot++) {
+                    streamVertices[slot] = BGFXTransientVertexBuffer.calloc();
+                    streamIndices[slot] = BGFXTransientIndexBuffer.calloc();
+                }
+            }
             short vs = shader(shaders.resolve("vs_terrain.bin"));
             short fs;
             try { fs = shader(shaders.resolve("fs_terrain.bin")); }
@@ -121,6 +141,10 @@ final class BgfxTerrainRenderer implements AutoCloseable {
     }
 
     static boolean supported(MetalWorldFrame frame) {
+        return supported(frame, activeTargets(frame));
+    }
+
+    private static boolean supported(MetalWorldFrame frame, Set<MetalWorldFrame.Texture> active) {
         if (frame.skipped != 0 || frame.passes.isEmpty()) return false;
         for (MetalWorldFrame.Pass pass : frame.passes) {
             int[] flags = pass.raster;
@@ -135,7 +159,6 @@ final class BgfxTerrainRenderer implements AutoCloseable {
         for (MetalWorldFrame.Texture texture : frame.textures) {
             if (!supportedWrap(texture.wrapS) || !supportedWrap(texture.wrapT)) return false;
         }
-        Set<MetalWorldFrame.Texture> active = activeTargets(frame);
         long pixels = 0;
         for (MetalWorldFrame.Texture target : active) pixels += targetPixels(target);
         return active.size() <= MAX_TARGETS && pixels <= TARGET_PIXEL_BUDGET;
@@ -143,54 +166,104 @@ final class BgfxTerrainRenderer implements AutoCloseable {
 
     private static boolean supportedWrap(int mode) { return mode == 33071 || mode == 33648 || mode == 10497; }
 
-    void draw(MetalWorldFrame frame, String screenshot) {
-        if (frame != previous) prepare(frame);
+    boolean draw(MetalWorldFrame frame, String screenshot) {
+        if (frame != previous) {
+            Set<MetalWorldFrame.Texture> active = activeTargets(frame);
+            if (!supported(frame, active)) return false;
+            prepare(frame, active);
+        }
+        if (gameWindow) {
+            streamGeometry(frame, IndexData.Type.UINT16, 0);
+            streamGeometry(frame, IndexData.Type.UINT32, 1);
+        }
+        matrixUploads = stateUploads = 0;
+        int discard = BGFX_DISCARD_ALL & ~BGFX_DISCARD_TRANSFORM;
+        int keepRun = discard & ~(BGFX_DISCARD_STATE | BGFX_DISCARD_BINDINGS);
         for (int p = 0; p < frame.passes.size(); p++) {
             int[] clip = clips[p];
-            if (frame.passes.get(p).draws.isEmpty() || clip != null && (clip[2] <= 0 || clip[3] <= 0)) {
+            List<MetalWorldFrame.Draw> draws = frame.passes.get(p).draws;
+            if (draws.isEmpty() || clip != null && (clip[2] <= 0 || clip[3] <= 0)) {
                 if (p == 0 || views[p] != views[p - 1]) bgfx_touch(views[p]);
                 continue;
             }
             float[] offset = polygonOffsets[p];
             short passProgram = offset == null ? program : offsetProgram;
-            for (MetalWorldFrame.Draw draw : frame.passes.get(p).draws) {
-                GpuMesh mesh = meshTable[draw.mesh];
-                mask[0] = draw.mask;
-                mask[1] = renderTarget(frame, draw.atlas) ? 1 : 0;
-                mask[2] = renderTarget(frame, draw.lightmap) ? 1 : 0;
-                bgfx_set_transform(draw.model);
-                bgfx_set_uniform(terrain, materials[p], MATERIAL_VECTORS);
+            materialData.put(materials[p]).flip();
+            if (offset != null) offsetData.put(offset).flip();
+            float[] lastModel = null;
+            int first = 0;
+            while (first < draws.size()) {
+                MetalWorldFrame.Draw state = draws.get(first);
+                int end = first + 1;
+                while (end < draws.size()) {
+                    MetalWorldFrame.Draw next = draws.get(end);
+                    if (next.mask != state.mask || next.atlas != state.atlas || next.lightmap != state.lightmap) break;
+                    end++;
+                }
+                // Sequential draws with matching state can share uniforms and bindings.
+                mask.put(0, state.mask);
+                mask.put(1, renderTarget(frame, state.atlas) ? 1 : 0);
+                mask.put(2, renderTarget(frame, state.lightmap) ? 1 : 0);
+                bgfx_set_uniform(terrain, materialData, MATERIAL_VECTORS);
                 bgfx_set_uniform(drawState, mask, 1);
-                if (offset != null) bgfx_set_uniform(polygonOffset, offset, 1);
-                bgfx_set_texture(0, atlasSampler, textureTable[draw.atlas], -1);
-                bgfx_set_texture(1, lightSampler, textureTable[draw.lightmap], -1);
-                bgfx_set_vertex_buffer(0, mesh.page.vertices, mesh.firstVertex, mesh.vertexCount);
-                bgfx_set_index_buffer(mesh.page.indices, mesh.firstIndex, mesh.indexCount);
-                long topology = (draw.mask & MetalWorldFrame.Draw.LINE) != 0 ? BGFX_STATE_PT_LINES : 0;
+                if (offset != null) bgfx_set_uniform(polygonOffset, offsetData, 1);
+                bgfx_set_texture(0, atlasSampler, textureTable[state.atlas], -1);
+                bgfx_set_texture(1, lightSampler, textureTable[state.lightmap], -1);
+                long topology = (state.mask & MetalWorldFrame.Draw.LINE) != 0 ? BGFX_STATE_PT_LINES : 0;
                 bgfx_set_state(states[p] | topology, 0);
                 if (clip != null) bgfx_set_scissor(clip[0], clip[1], clip[2], clip[3]);
                 if (stencils[p] != BGFX_STENCIL_NONE) bgfx_set_stencil(stencils[p], BGFX_STENCIL_NONE);
-                bgfx_submit(views[p], passProgram, 0, BGFX_DISCARD_ALL);
+                stateUploads++;
+
+                for (int i = first; i < end; i++) {
+                    MetalWorldFrame.Draw draw = draws.get(i);
+                    GpuMesh mesh = meshTable[draw.mesh];
+                    if (!Arrays.equals(lastModel, draw.model)) {
+                        modelData.put(draw.model).flip();
+                        bgfx_set_transform(modelData);
+                        modelData.clear();
+                        lastModel = draw.model;
+                        matrixUploads++;
+                    }
+                    if (mesh != null) {
+                        bgfx_set_vertex_buffer(0, mesh.page.vertices, mesh.firstVertex, mesh.vertexCount);
+                        bgfx_set_index_buffer(mesh.page.indices, mesh.firstIndex, mesh.indexCount);
+                    } else {
+                        MeshData data = frame.meshes.get(draw.mesh);
+                        int slot = data.indices().type() == IndexData.Type.UINT16 ? 0 : 1;
+                        bgfx_set_transient_vertex_buffer(0, streamVertices[slot], streamFirstVertex[draw.mesh], data.vertexCount());
+                        bgfx_set_transient_index_buffer(streamIndices[slot], streamFirstIndex[draw.mesh], data.indices().count());
+                    }
+                    bgfx_submit(views[p], passProgram, 0, i + 1 == end ? discard : keepRun);
+                }
+                first = end;
             }
+            materialData.clear();
+            offsetData.clear();
         }
         if (screenshot != null) bgfx_request_screen_shot(BGFX_INVALID_HANDLE, screenshot);
         bgfx_frame(BGFX_FRAME_NONE);
+        return true;
     }
 
     private static boolean renderTarget(MetalWorldFrame frame, int index) {
         return index != 0 && frame.textures.get(index - 1).renderTarget();
     }
 
-    private void prepare(MetalWorldFrame frame) {
-        if (!supported(frame)) throw new IllegalArgumentException("Unsupported bgfx terrain frame");
+    private void prepare(MetalWorldFrame frame, Set<MetalWorldFrame.Texture> active) {
         generation++;
         retainGeometry(frame);
         retireUnused(textures, frame.textures, org.lwjgl.bgfx.BGFX::bgfx_destroy_texture);
-        prepareTargets(frame);
+        prepareTargets(active);
         uploadMissing(frame, IndexData.Type.UINT16, true);
         uploadMissing(frame, IndexData.Type.UINT32, true);
-        uploadMissing(frame, IndexData.Type.UINT16, false);
-        uploadMissing(frame, IndexData.Type.UINT32, false);
+        if (!gameWindow) {
+            uploadMissing(frame, IndexData.Type.UINT16, false);
+            uploadMissing(frame, IndexData.Type.UINT32, false);
+        } else if (streamFirstVertex == null || streamFirstVertex.length < frame.meshes.size()) {
+            streamFirstVertex = new int[frame.meshes.size()];
+            streamFirstIndex = new int[frame.meshes.size()];
+        }
         meshTable = new GpuMesh[frame.meshes.size()];
         for (int i = 0; i < meshTable.length; i++) meshTable[i] = meshes.get(frame.meshes.get(i));
         textureTable = new short[frame.textures.size() + 1];
@@ -268,6 +341,48 @@ final class BgfxTerrainRenderer implements AutoCloseable {
         return (long)mesh.vertexCount() * mesh.layout().stride() + (long)mesh.indices().count() * mesh.indices().type().bytes;
     }
 
+    int residentPages() { return geometryPages.size(); }
+
+    private void streamGeometry(MetalWorldFrame frame, IndexData.Type type, int slot) {
+        int vertices = 0, indices = 0, count = 0;
+        for (int i = 0; i < meshTable.length; i++) {
+            if (meshTable[i] != null) continue;
+            MeshData data = frame.meshes.get(i);
+            if (data.indices().type() != type) continue;
+            if (!data.layout().equals(GameTerrainFormat.LAYOUT)) throw new IllegalArgumentException("Unexpected MCGL terrain layout");
+            streamFirstVertex[i] = vertices;
+            streamFirstIndex[i] = indices;
+            vertices += data.vertexCount();
+            indices += data.indices().count();
+            count++;
+        }
+        if (count == 0) return;
+
+        BGFXTransientVertexBuffer vertex = streamVertices[slot];
+        BGFXTransientIndexBuffer index = streamIndices[slot];
+        if (vertices > 0 && indices > 0 && bgfx_alloc_transient_buffers(vertex, layout, vertices, index,
+                indices, type == IndexData.Type.UINT32)) {
+            ByteBuffer vertexData = vertex.data(), indexData = index.data();
+            for (int i = 0; i < meshTable.length; i++) {
+                if (meshTable[i] != null) continue;
+                MeshData data = frame.meshes.get(i);
+                if (data.indices().type() != type) continue;
+                vertexData.put(data.vertices());
+                indexData.put(data.indices().bytes());
+                meshUploads++;
+            }
+            streamPages++;
+            return;
+        }
+
+        // Large frames can exceed bgfx's per-frame stream budget. Keep the existing upload path.
+        uploadMissing(frame, type, false);
+        for (int i = 0; i < meshTable.length; i++) {
+            if (meshTable[i] == null && frame.meshes.get(i).indices().type() == type)
+                meshTable[i] = meshes.get(frame.meshes.get(i));
+        }
+    }
+
     private void retainGeometry(MetalWorldFrame frame) {
         long missing = 0;
         for (MeshData mesh : frame.meshes) {
@@ -275,41 +390,49 @@ final class BgfxTerrainRenderer implements AutoCloseable {
             if (gpu == null) missing += meshBytes(mesh);
             else gpu.page.lastUse = generation;
         }
-        Set<GeometryPage> stale = Collections.newSetFromMap(new IdentityHashMap<GeometryPage, Boolean>());
-        Iterator<GpuMesh> entries = meshes.values().iterator();
-        while (entries.hasNext()) {
-            GpuMesh mesh = entries.next();
-            GeometryPage page = mesh.page;
-            if (page.lastUse == generation) continue;
-            if (!page.retained || generation - page.lastUse > RETAINED_FRAMES) {
-                releaseMesh(mesh);
-                entries.remove();
-            } else stale.add(page);
-        }
-        long budget = gameWindow ? 512L << 20 : GEOMETRY_BUDGET;
-        if (missing == 0 || residentGeometry + missing <= budget && residentPages < MAX_RETAINED_PAGES) return;
-        List<GeometryPage> oldest = new ArrayList<>(stale);
-        oldest.sort((a, b) -> Long.compare(a.lastUse, b.lastUse));
-        stale.clear();
-        long bytes = residentGeometry;
-        int pages = residentPages;
-        for (GeometryPage page : oldest) {
-            if (bytes + missing <= budget && pages < MAX_RETAINED_PAGES) break;
-            stale.add(page);
-            bytes -= page.bytes;
-            pages--;
-        }
-        entries = meshes.values().iterator();
-        while (entries.hasNext()) {
-            GpuMesh mesh = entries.next();
-            if (stale.contains(mesh.page)) {
-                releaseMesh(mesh);
-                entries.remove();
+        Iterator<GeometryPage> pages = geometryPages.iterator();
+        while (pages.hasNext()) {
+            GeometryPage page = pages.next();
+            if (page.lastUse != generation && (!page.retained || generation - page.lastUse > RETAINED_FRAMES)) {
+                releasePage(page);
+                pages.remove();
             }
         }
-        // Fragmented pages can all contain visible meshes. Repack only if
-        // retiring unused pages could not free enough of the bounded cache.
-        if (residentGeometry + missing > budget || residentPages >= MAX_RETAINED_PAGES) releaseMeshes();
+        long budget = gameWindow ? 512L << 20 : GEOMETRY_BUDGET;
+        if (missing == 0 || residentGeometry + missing <= budget && geometryPages.size() < MAX_RETAINED_PAGES) return;
+
+        geometryPages.sort((a, b) -> Long.compare(a.lastUse, b.lastUse));
+        pages = geometryPages.iterator();
+        while (pages.hasNext() && (residentGeometry + missing > budget || geometryPages.size() >= MAX_RETAINED_PAGES)) {
+            GeometryPage page = pages.next();
+            if (page.lastUse == generation) break;
+            releasePage(page);
+            pages.remove();
+        }
+        if (residentGeometry + missing > budget || geometryPages.size() >= MAX_RETAINED_PAGES)
+            compactGeometry(frame, missing, budget);
+    }
+
+    private void compactGeometry(MetalWorldFrame frame, long missing, long budget) {
+        for (GeometryPage page : geometryPages) page.activeBytes = 0;
+        for (MeshData mesh : frame.meshes) {
+            GpuMesh gpu = meshes.get(mesh);
+            if (gpu != null) gpu.page.activeBytes += meshBytes(mesh);
+        }
+        // The next upload combines the visible meshes from these sparse pages
+        // with newly visible geometry. Leave most of the live cache in place.
+        geometryPages.sort((a, b) -> Long.compare(a.activeBytes, b.activeBytes));
+        int targetPages = geometryPages.size() >= MAX_RETAINED_PAGES
+                ? MAX_RETAINED_PAGES - COMPACTION_HEADROOM : geometryPages.size();
+        Iterator<GeometryPage> pages = geometryPages.iterator();
+        while (pages.hasNext() && (geometryPages.size() > targetPages || residentGeometry + missing > budget)) {
+            GeometryPage page = pages.next();
+            missing += page.activeBytes;
+            releasePage(page);
+            pages.remove();
+        }
+        if (geometryPages.isEmpty()) geometryRepacks++;
+        else geometryCompactions++;
     }
 
     private void uploadMissing(MetalWorldFrame frame, IndexData.Type type, boolean retained) {
@@ -352,9 +475,9 @@ final class BgfxTerrainRenderer implements AutoCloseable {
             bgfx_destroy_vertex_buffer(vertices);
             throw error;
         }
-        GeometryPage page = new GeometryPage(vertices, indices, pending.size(), bytes, retained, generation);
+        GeometryPage page = new GeometryPage(vertices, indices, pending.toArray(new MeshData[0]), bytes, retained, generation);
         residentGeometry += bytes;
-        residentPages++;
+        geometryPages.add(page);
         pageUploads++;
         int firstVertex = 0, firstIndex = 0;
         for (MeshData mesh : pending) {
@@ -371,11 +494,11 @@ final class BgfxTerrainRenderer implements AutoCloseable {
         final short vertices, indices;
         final long bytes;
         final boolean retained;
-        long lastUse;
-        int references;
-        GeometryPage(short vertices, short indices, int references, long bytes, boolean retained, long lastUse) {
+        long lastUse, activeBytes;
+        final MeshData[] meshes;
+        GeometryPage(short vertices, short indices, MeshData[] meshes, long bytes, boolean retained, long lastUse) {
             this.vertices = vertices; this.indices = indices;
-            this.references = references; this.bytes = bytes;
+            this.meshes = meshes; this.bytes = bytes;
             this.retained = retained; this.lastUse = lastUse;
         }
         void close() {
@@ -393,18 +516,20 @@ final class BgfxTerrainRenderer implements AutoCloseable {
         }
     }
 
-    private void releaseMesh(GpuMesh mesh) {
-        GeometryPage page = mesh.page;
-        if (--page.references == 0) {
-            page.close();
-            residentGeometry -= page.bytes;
-            residentPages--;
+    private void releasePage(GeometryPage page) {
+        for (MeshData data : page.meshes) {
+            GpuMesh mesh = meshes.get(data);
+            if (mesh != null && mesh.page == page) meshes.remove(data);
         }
+        page.close();
+        residentGeometry -= page.bytes;
     }
 
     private void releaseMeshes() {
-        for (GpuMesh mesh : meshes.values()) releaseMesh(mesh);
+        for (GeometryPage page : geometryPages) page.close();
+        geometryPages.clear();
         meshes.clear();
+        residentGeometry = 0;
     }
 
     private static <K, V> void retireUnused(Map<K, V> cache, List<K> active, java.util.function.Consumer<V> destroy) {
@@ -420,8 +545,8 @@ final class BgfxTerrainRenderer implements AutoCloseable {
         }
     }
 
-    private void prepareTargets(MetalWorldFrame frame) {
-        Set<MetalWorldFrame.Texture> active = activeTargets(frame);
+    private void prepareTargets(Set<MetalWorldFrame.Texture> active) {
+        if (active.isEmpty() && targets.isEmpty()) return;
         long pixels = 0;
         int count = active.size();
         for (MetalWorldFrame.Texture image : active) pixels += targetPixels(image);
@@ -501,6 +626,10 @@ final class BgfxTerrainRenderer implements AutoCloseable {
         if (polygonOffset != BGFX_INVALID_HANDLE) bgfx_destroy_uniform(polygonOffset);
         if (offsetProgram != BGFX_INVALID_HANDLE) bgfx_destroy_program(offsetProgram);
         if (program != BGFX_INVALID_HANDLE) bgfx_destroy_program(program);
+        for (int slot = 0; slot < streamVertices.length; slot++) {
+            if (streamVertices[slot] != null) streamVertices[slot].close();
+            if (streamIndices[slot] != null) streamIndices[slot].close();
+        }
         layout.close();
     }
 

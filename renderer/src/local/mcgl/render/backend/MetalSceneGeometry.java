@@ -69,7 +69,6 @@ final class MetalSceneGeometry {
 
     static MeshData text(ByteBuffer input, int vertices, int stride) {
         ByteBuffer out = buffer(vertices);
-        int[] indices = new int[vertices];
         for (int i = 0; i < vertices; i++) {
             int at = i * stride, matrix = at + 60;
             float x = input.getFloat(at), y = input.getFloat(at + 4), z = input.getFloat(at + 8);
@@ -84,10 +83,9 @@ final class MetalSceneGeometry {
             pair(out, input, at + 36, null, 8, 8, true);
             color(out, input, at + 44, null, 2);
             out.putInt(0);
-            indices[i] = i;
         }
         out.flip();
-        return MeshData.takeOwnedVertices(GameTerrainFormat.LAYOUT, out, IndexData.of(indices));
+        return MeshData.takeOwnedVertices(GameTerrainFormat.LAYOUT, out, IndexData.sequential(vertices));
     }
 
     private static ByteBuffer buffer(int vertices) {

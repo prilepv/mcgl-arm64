@@ -137,9 +137,6 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/tests/Launcher174UpgradeTest.swift" -o "$result_dir/release-174-upgrade-test"
 "$result_dir/release-174-upgrade-test"
-swiftc -parse-as-library -swift-version 5 -target arm64-apple-macosx14.0 \
-    -module-cache-path "$result_dir/modules" \
-    "$source_root/tools/BuildICNS.swift" -o "$result_dir/build-icns"
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" \
     "$source_root/native-launcher/MCGLLauncherPreferences.swift" \

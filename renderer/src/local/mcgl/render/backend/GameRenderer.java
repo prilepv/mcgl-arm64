@@ -397,6 +397,7 @@ public class GameRenderer {
         int first=nextName;nextName=Math.addExact(nextName,count);if(nextName<=0)throw new IllegalStateException("Game model id space exhausted");return first;
     }
     public void glNewList(int name,int mode){glNewList(name,mode,false);}
+    public boolean compilingModel() { check(); return compiling != null || originalChunk != null; }
     public void glNewList(int name,int mode,boolean terrain) {
         outsideBegin();flushText();if(compiling!=null||name<=0||mode!=4864)throw new IllegalArgumentException("Invalid game model compilation");
         if(originalChunk!=null&&!originalChunk.contains(name))throw new IllegalArgumentException("Model outside original chunk transaction");

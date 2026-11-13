@@ -77,10 +77,7 @@ render_icon icon_256x256.png 256
 render_icon icon_256x256@2x.png 512
 render_icon icon_512x512.png 512
 render_icon icon_512x512@2x.png 1024
-swiftc -parse-as-library -swift-version 5 -module-cache-path "$icon_work/modules" \
-    "$script_dir/tools/BuildICNS.swift" \
-    -o "$icon_work/build-icns"
-"$icon_work/build-icns" "$iconset" "$icon_work/app.icns"
+/usr/bin/iconutil -c icns "$iconset" -o "$icon_work/app.icns"
 ditto "$icon_work/app.icns" "$runtime_app/Contents/Resources/app.icns"
 ditto "$icon_work/app.icns" "$resources_dir/app.icns"
 ditto "$icon_symbol" "$resources_dir/app-icon-symbol.png"
@@ -145,6 +142,7 @@ lwjgl_patch_classes=$(mktemp -d /private/tmp/mcgl-lwjgl-classes.XXXXXX)
     "$script_dir/performance-patch/src/local/mcgl/perf/AnimationCache.java" \
     "$script_dir/performance-patch/src/local/mcgl/perf/LightmapCache.java" \
     "$script_dir/performance-patch/src/local/mcgl/perf/RenderDiagnostics.java"
+bash "$script_dir/tools/build-local-compatibility.sh" "$java_source" "$resources_dir/PatchTools"
 ditto "$script_dir/tools/client-profiles" "$resources_dir/PatchTools/client-profiles"
 
 bash "$script_dir/tools/build-glfw-support.sh" \

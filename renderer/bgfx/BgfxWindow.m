@@ -6,7 +6,9 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 
 static char startupCoverKey;
 
@@ -19,6 +21,12 @@ static char startupCoverKey;
 @implementation MCGLStartupMetalLayer {
     __weak NSView *startupCover;
     atomic_bool revealed;
+    BOOL logPacing;
+    MTLDrawablePresentedHandler presentedHandler;
+    double gapThresholdMs;
+    CFTimeInterval lastPresented, reportStart, peakTime;
+    double peakMs, totalMs;
+    unsigned intervals, gaps, dropped;
 }
 
 - (instancetype)initWithStartupCover:(NSView *)cover {
@@ -26,26 +34,67 @@ static char startupCoverKey;
     if (self) {
         startupCover = cover;
         atomic_init(&revealed, false);
+        const char *diagnostics = getenv("MCGL_GRAPHICS_DIAGNOSTICS");
+        logPacing = diagnostics && strcmp(diagnostics, "1") == 0;
+        const char *limit = getenv("MCGL_FPS_LIMIT");
+        long fps = limit ? strtol(limit, NULL, 10) : 0;
+        gapThresholdMs = fps > 0 ? 1500.0 / fps : 16.67;
+        __weak MCGLStartupMetalLayer *layer = self;
+        presentedHandler = ^(id<MTLDrawable> presented) {
+            [layer handlePresentation:presented.presentedTime];
+        };
     }
     return self;
 }
 
+- (void)recordPresentation:(CFTimeInterval)time {
+    @synchronized (self) {
+        if (time <= 0) { dropped++; return; }
+        if (time <= lastPresented) return;
+        if (lastPresented > 0) {
+            double elapsedMs = (time - lastPresented) * 1000;
+            totalMs += elapsedMs;
+            intervals++;
+            if (elapsedMs > gapThresholdMs) gaps++;
+            if (elapsedMs > peakMs) {
+                peakMs = elapsedMs;
+                peakTime = time;
+            }
+        } else {
+            reportStart = time;
+        }
+        lastPresented = time;
+        if (time - reportStart < 5) return;
+        double epochMs = (CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970
+            + peakTime - CACurrentMediaTime()) * 1000;
+        fprintf(stdout, "[MCGL Metal Pacing] %.3fs intervals=%u avg=%.3f max=%.3f ms over%.2f=%u dropped=%u peakEpochMs=%.0f\n",
+            time - reportStart, intervals, totalMs / intervals, peakMs, gapThresholdMs, gaps, dropped, epochMs);
+        fflush(stdout);
+        reportStart = time;
+        totalMs = peakMs = 0;
+        intervals = gaps = dropped = 0;
+    }
+}
+
+- (void)handlePresentation:(CFTimeInterval)time {
+    if (logPacing) [self recordPresentation:time];
+    if (time <= 0 || atomic_load_explicit(&revealed, memory_order_relaxed)
+            || atomic_exchange_explicit(&revealed, true, memory_order_relaxed)) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSView *cover = self->startupCover;
+        NSWindow *window = cover.window;
+        if (!window || objc_getAssociatedObject(window, &startupCoverKey) != cover) return;
+        [cover removeFromSuperview];
+        objc_setAssociatedObject(window, &startupCoverKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        fputs("[MCGL bgfx] first Metal frame presented; startup cover removed\n", stdout);
+        fflush(stdout);
+    });
+}
+
 - (id<CAMetalDrawable>)nextDrawable {
     id<CAMetalDrawable> drawable = [super nextDrawable];
-    if (!atomic_load_explicit(&revealed, memory_order_relaxed)) {
-        [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
-            if (presented.presentedTime <= 0 || atomic_exchange_explicit(&self->revealed, true, memory_order_relaxed)) return;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                NSView *cover = self->startupCover;
-                NSWindow *window = cover.window;
-                if (!window || objc_getAssociatedObject(window, &startupCoverKey) != cover) return;
-                [cover removeFromSuperview];
-                objc_setAssociatedObject(window, &startupCoverKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                fputs("[MCGL bgfx] first Metal frame presented; startup cover removed\n", stdout);
-                fflush(stdout);
-            });
-        }];
-    }
+    if (logPacing || !atomic_load_explicit(&revealed, memory_order_relaxed))
+        [drawable addPresentedHandler:presentedHandler];
     return drawable;
 }
 @end

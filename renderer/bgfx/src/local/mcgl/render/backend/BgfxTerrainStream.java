@@ -2,7 +2,9 @@ package local.mcgl.render.backend;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Locale;
 import org.lwjgl.bgfx.BGFXInit;
+import org.lwjgl.bgfx.BGFXStats;
 import org.lwjgl.system.Configuration;
 import static org.lwjgl.bgfx.BGFX.*;
 
@@ -41,15 +43,29 @@ final class BgfxTerrainStream implements MetalWorldLive.BgfxSink {
     }
 
     @Override public boolean draw(MetalWorldFrame frame) {
-        if (!BgfxTerrainRenderer.supported(frame)) return false;
-        renderer.draw(frame, null);
-        return true;
+        return renderer.draw(frame, null);
     }
 
     @Override public String uploads() {
-        return "meshUploads=" + renderer.meshUploads + " textureUploads=" + renderer.textureUploads
+        String uploads = "meshUploads=" + renderer.meshUploads + " textureUploads=" + renderer.textureUploads
                 + " pageUploads=" + renderer.pageUploads + " renderTargets=" + renderer.targetAllocations
                 + " retainedUploads=" + renderer.retainedUploads;
+        if (!Boolean.getBoolean("mcgl.graphics.profile")) return uploads;
+        BGFXStats stats = bgfx_get_stats();
+        if (stats == null) return uploads;
+        return "matrixUploads=" + renderer.matrixUploads
+                + " stateUploads=" + renderer.stateUploads
+                + " streamPages=" + renderer.streamPages
+                + " residentPages=" + renderer.residentPages() + " geometryRepacks=" + renderer.geometryRepacks
+                + " geometryCompactions=" + renderer.geometryCompactions
+                + " renderCpuMs=" + milliseconds(stats.cpuTimeBegin(), stats.cpuTimeEnd(), stats.cpuTimerFreq())
+                + " gpuMs=" + milliseconds(stats.gpuTimeBegin(), stats.gpuTimeEnd(), stats.gpuTimerFreq())
+                + " " + uploads;
+    }
+
+    private static String milliseconds(long start, long end, long frequency) {
+        return frequency > 0 && end > start
+                ? String.format(Locale.ROOT, "%.3f", (end - start) * 1000.0 / frequency) : "n/a";
     }
 
     @Override public int presentationPolicy() {

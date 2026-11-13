@@ -30,12 +30,25 @@ public final class MCGLCompatibilityPack {
     static MCGLCompatibilityPack active() { return Selected.VALUE; }
     private static MCGLCompatibilityPack selected() {
         String pack = System.getProperty("mcgl.compat.pack", "");
+        String local = System.getProperty("mcgl.compat.local", "");
+        if (!local.isEmpty() && pack.isEmpty()) return selectLocal(local);
         if (pack.isEmpty()) return null;
         try {
             String original = System.getProperty("mcgl.compat.official", "");
             require(!original.isEmpty(), "Missing official input for signed pack");
             return load(Paths.get(pack), MCGLBytecodeFingerprint.sha256(Files.readAllBytes(Paths.get(original))));
         } catch (Exception failure) { throw new IllegalStateException("MCGL_COMPAT_PACK_REJECTED: " + failure.getMessage(), failure); }
+    }
+
+    private static MCGLCompatibilityPack selectLocal(String path) {
+        // The installer only passes files generated in its private staging directory.
+        try (InputStream input = Files.newInputStream(Paths.get(path))) {
+            Path original = Paths.get(System.getProperty("mcgl.compat.official"));
+            String sha = MCGLBytecodeFingerprint.sha256(Files.readAllBytes(original));
+            return parsePayload(read(input, LIMIT), sha);
+        } catch (Exception failure) {
+            throw new IllegalStateException("Local compatibility profile rejected", failure);
+        }
     }
 
     static byte[] read(InputStream input, int limit) throws IOException {

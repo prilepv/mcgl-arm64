@@ -189,7 +189,9 @@ public final class DirectLauncher {
 
     private static int terrain(GameRenderCommands g, float shift, int mode) {
         int id = g.glGenLists(1);
+        if (g.compilingModel()) throw new AssertionError("Unexpected active model compilation");
         g.beginOriginalChunk(id, 1);
+        if (!g.compilingModel()) throw new AssertionError("Tile model cache must be bypassed inside a chunk rebuild");
         g.glNewList(id, GL11.GL_COMPILE);
         float[][] positions = {{-.7f, -.6f}, {.7f, -.6f}, {.7f, .6f}, {-.7f, .6f}};
         int[] vertices = new int[32];

@@ -285,6 +285,7 @@ struct LauncherUITest {
                 root.layoutSubtreeIfNeeded()
             }
             if index == 3 {
+                precondition(button("copy-log").title == "Скопировать")
                 let log = descendants(root).compactMap { $0 as? NSTextView }.first!
                 log.textStorage?.append(NSAttributedString(string: String(repeating: "Test log line with wrapped text. ", count: 80)))
                 log.scrollToEndOfDocument(nil)

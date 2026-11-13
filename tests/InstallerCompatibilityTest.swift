@@ -61,11 +61,11 @@ struct InstallerCompatibilityTest {
         let utility = try stage("utility-only", nil)
         try installer.prepareStagedClient(in: utility)
         let unknown = root.appendingPathComponent("unknown.jar")
-        var bytes = try Data(contentsOf: updated); bytes.append(42); try bytes.write(to: unknown)
+        try Data("invalid JAR".utf8).write(to: unknown)
         let rejected = try stage("unsupported", unknown)
         do { try installer.prepareStagedClient(in: rejected); fatalError("Unknown official client accepted") }
         catch {
-            precondition(error.localizedDescription.contains("пока не поддерживается"))
+            precondition((error as NSError).userInfo["MCGLCompatibilityUnavailable"] as? Bool == true)
             precondition(error.localizedDescription.contains("не изменены"))
         }
         do { try installer.prepareStagedClient(in: installed); fatalError("Installed profile allowed as staging") }

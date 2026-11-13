@@ -76,6 +76,9 @@ version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
 "$jdk/bin/jar" uf "$packaged/PortSupport/bin/lwjgl.jar" -C "$classes" local -C "$classes" org/lwjgl/bgfx -C "$classes" META-INF/mcgl
 cp "$packaged/PortSupport/bin/lwjgl.jar" "$bgfx/lwjgl.jar"
 asm="$resources/PatchTools/asm-debug-all.jar"
+"$jdk/bin/javac" --release 8 -encoding UTF-8 -cp "$asm:$packaged/PatchTools" \
+    -d "$packaged/PatchTools" "$root/tools/PatchMCGLGame.java"
+bash "$root/tools/build-local-compatibility.sh" "$jdk" "$packaged/PatchTools"
 "$jdk/bin/javac" --release 8 -cp "$asm" -d "$work/render/tools" "$root/tools/PrepareBgfxGameBridge.java"
 "$jdk/bin/java" -cp "$work/render/tools:$asm" PrepareBgfxGameBridge "$classes"
 "$jdk/bin/jar" uf "$bgfx/lwjgl.jar" -C "$classes" local/mcgl/render/backend

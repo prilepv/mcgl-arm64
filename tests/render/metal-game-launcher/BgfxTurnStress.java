@@ -1,12 +1,15 @@
 package local.mcgl.render.backend;
 
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.IntBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import local.mcgl.render.IndexData;
 import local.mcgl.render.MeshData;
+import static org.lwjgl.bgfx.BGFX.BGFX_RESET_NONE;
 
 /** The HUD is drawn after a sudden jump in visible chunks, with its own transforms. */
 public final class BgfxTurnStress {
@@ -14,26 +17,56 @@ public final class BgfxTurnStress {
     private static final int[] EXPECTED = {0xff0000, 0x00ff00, 0x0000ff, 0x000000};
 
     public static void verify(Path windowLibrary, Path output) throws Exception {
-        try (BgfxTerrainStream stream = new BgfxTerrainStream(windowLibrary, WIDTH, HEIGHT, 0)) {
-            // Use the production stream's initialization and the renderer's existing screenshot hook.
-            Field field = BgfxTerrainStream.class.getDeclaredField("renderer");
-            field.setAccessible(true);
-            BgfxTerrainRenderer renderer = (BgfxTerrainRenderer)field.get(stream);
+        try (BgfxTerrainStream stream = new BgfxTerrainStream(windowLibrary, WIDTH, HEIGHT, 0);
+             BgfxTerrainRenderer renderer = new BgfxTerrainRenderer(windowLibrary.getParent(), WIDTH, HEIGHT, true, BGFX_RESET_NONE)) {
+            // Use a preview window to verify pixels from the game renderer's streamed and retained buffers.
+            verifyCachePressure(renderer);
             MetalWorldFrame quiet = frame(500);
             for (int i = 0; i < 5; i++) renderer.draw(quiet, null);
             for (int count : new int[]{1800, 5500, 13000}) {
                 Path name = output.resolve("turn-" + count);
                 MetalWorldFrame busy = frame(count);
+                long before = renderer.streamPages;
                 renderer.draw(busy, name.toString());
+                if (renderer.streamPages - before != 2)
+                    throw new AssertionError("Expected 16-bit and 32-bit transient pages");
+                if (renderer.matrixUploads != (count + 7) / 8 + 2)
+                    throw new AssertionError("Repeated matrices were uploaded again");
+                if (renderer.stateUploads != 4)
+                    throw new AssertionError("Repeated state was uploaded again");
                 for (int i = 0; i < 4; i++) renderer.draw(busy, null);
                 check(name.resolveSibling(name.getFileName() + ".tga"));
                 if (count == 1800) {
-                    // Allow the default peak window to expire before turning again.
-                    for (int i = 0; i < 300; i++) renderer.draw(quiet, null);
+                    // Advance cache generations while leaving the busy scene out of view.
+                    MetalWorldFrame alternateQuiet = frame(500);
+                    for (int i = 0; i < 300; i++) renderer.draw(i % 2 == 0 ? quiet : alternateQuiet, null);
+                    if (renderer.residentPages() != 2) throw new AssertionError("Unused geometry page was retained");
                 }
             }
         }
         System.out.println("BGFX_TURN_STRESS_PASS world, hand and map kept their coordinates up to 13002 draws");
+    }
+
+    private static void verifyCachePressure(BgfxTerrainRenderer renderer) {
+        MeshData source = frame(0).meshes.get(0);
+        List<MeshData> visible = new ArrayList<>();
+        long uploads = renderer.retainedUploads;
+        for (int i = 0; i <= 256; i++) {
+            visible.add(new MeshData(source.layout(), source.vertices(), source.indices()));
+            MetalWorldFrame frame = new MetalWorldFrame();
+            frame.width = WIDTH;
+            frame.height = HEIGHT;
+            frame.meshes.addAll(visible);
+            frame.retainedMeshes.set(0, visible.size());
+            MetalWorldFrame.Pass pass = pass(1, 0, 0);
+            pass.draws.add(rect(i, .25f, .25f, 0, 0, 0));
+            frame.passes.add(pass);
+            if (!renderer.draw(frame, null)) throw new AssertionError("Cache pressure frame was rejected");
+        }
+        if (renderer.geometryRepacks != 0 || renderer.geometryCompactions != 1
+                || renderer.retainedUploads - uploads != 289 || renderer.residentPages() != 225)
+            throw new AssertionError("A full geometry cache did not compact selectively");
+        System.out.println("BGFX_GEOMETRY_COMPACTION_PASS 32 existing pages compacted; 224 kept");
     }
 
     private static MetalWorldFrame frame(int count) {
@@ -49,21 +82,27 @@ public final class BgfxTurnStress {
         }
         vertices.flip();
         frame.meshes.add(new MeshData(GameTerrainFormat.LAYOUT, vertices, IndexData.of(new int[]{0, 1, 2, 0, 2, 3})));
+        frame.meshes.add(new MeshData(GameTerrainFormat.LAYOUT, vertices,
+                IndexData.unsignedInt(IntBuffer.wrap(new int[]{0, 1, 2, 0, 2, 3}))));
+        frame.meshes.add(new MeshData(GameTerrainFormat.LAYOUT, vertices, IndexData.of(new int[]{0, 1, 2, 0, 2, 3})));
+        frame.retainedMeshes.set(2);
 
         MetalWorldFrame.Pass world = pass(0, 0, 1);
         world.raster[4] = 1;
         world.raster[5] = 1;
         for (int i = 0; i < count; i++) {
-            world.draws.add(rect(.12f, .12f, -.65f + (i % 31) * .0001f, (i % 27) * .0001f));
+            int group = i / 8;
+            world.draws.add(rect(0, .12f, .12f, -.65f + (group % 31) * .0001f, (group % 27) * .0001f,
+                    i < count / 2 ? 0 : 4));
         }
         frame.passes.add(world);
 
         MetalWorldFrame.Pass hand = pass(1, 0, 0);
         hand.raster[9] = 1;
-        hand.draws.add(rect(.15f, .2f, .25f, .25f));
+        hand.draws.add(rect(2, .15f, .2f, .25f, .25f, 0));
         frame.passes.add(hand);
         MetalWorldFrame.Pass map = pass(0, 1, 0);
-        map.draws.add(rect(.1f, .1f, .67f, .6f));
+        map.draws.add(rect(1, .1f, .1f, .67f, .6f, 0));
         frame.passes.add(map);
         return frame;
     }
@@ -79,8 +118,8 @@ public final class BgfxTurnStress {
         return pass;
     }
 
-    private static MetalWorldFrame.Draw rect(float sx, float sy, float x, float y) {
-        MetalWorldFrame.Draw draw = new MetalWorldFrame.Draw(0, 0, 0, 0);
+    private static MetalWorldFrame.Draw rect(int mesh, float sx, float sy, float x, float y, int mask) {
+        MetalWorldFrame.Draw draw = new MetalWorldFrame.Draw(mesh, 0, 0, mask);
         draw.model[0] = sx;
         draw.model[5] = sy;
         draw.model[10] = draw.model[15] = 1;

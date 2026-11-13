@@ -1946,6 +1946,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let subtitle = note("Здесь появляются сообщения о загрузке клиента и работе игры.")
         let clearButton = actionButton("Очистить", symbol: "xmark",
                                        action: #selector(clearVisibleLog))
+        let copyButton = actionButton("Скопировать", symbol: "doc.on.doc",
+                                      action: #selector(copyVisibleLog))
+        copyButton.identifier = NSUserInterfaceItemIdentifier("copy-log")
         let scrollView = NSScrollView()
         scrollView.contentView = VerticalLogClipView()
         scrollView.hasVerticalScroller = true
@@ -1970,7 +1973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         logView.textColor = .white
         logView.setAccessibilityLabel("Журнал запуска и игры")
         scrollView.documentView = logView
-        add([title, subtitle, clearButton, scrollView], to: card)
+        add([title, subtitle, copyButton, clearButton, scrollView], to: card)
         NSLayoutConstraint.activate([
             title.topAnchor.constraint(equalTo: card.topAnchor, constant: 24),
             title.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 24),
@@ -1981,6 +1984,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             clearButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
             clearButton.widthAnchor.constraint(equalToConstant: 108),
             clearButton.heightAnchor.constraint(equalToConstant: 32),
+            copyButton.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            copyButton.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -8),
+            copyButton.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 12),
+            copyButton.widthAnchor.constraint(equalToConstant: 140),
+            copyButton.heightAnchor.constraint(equalTo: clearButton.heightAnchor),
             scrollView.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 22),
             scrollView.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: clearButton.trailingAnchor),
@@ -2217,6 +2225,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     @objc private func clearVisibleLog() {
         logView.string = ""
+    }
+
+    @objc private func copyVisibleLog() {
+        let text = logView.string
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     @objc private func checkForLauncherUpdate() {
