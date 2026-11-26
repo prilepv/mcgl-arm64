@@ -1,15 +1,12 @@
-# Minecraft Galaxy ARM64 — Bootstrap 1.8.6
+# Minecraft Galaxy ARM64 — Bootstrap 1.8.7
 
 Неофициальный нативный порт для Apple Silicon, macOS 14 или новее.
 Java 21 ARM64 встроена. Оригинальные игровые JAR и ресурсы не входят в пакет:
 при первом запуске они загружаются с официальных зеркал Minecraft Galaxy.
 
-## Изменения в 1.8.6
+## Изменения в 1.8.7
 
-- Лаунчер пробует адаптировать обновления MCGL, если подписанный пакет совместимости ещё недоступен.
-- Снижена нагрузка рендера Metal.
-- Исправлены сбои при отрисовке моделей и выключении проектора.
-- Исправлена маленькая иконка приложения. В журнале появилась кнопка «Скопировать».
+- Исправлен запуск с обновлённым MCGL и добавлено отдельное обновление модуля совместимости через лаунчер.
 
 ## Установка и обновление
 
@@ -30,10 +27,10 @@ Java 21 ARM64 встроена. Оригинальные игровые JAR и �
 
 ## Ссылки
 
-- [Релиз и SHA-256](https://github.com/prilepv/mcgl-arm64/releases/tag/v1.8.6)
-- [Описание выпуска](https://github.com/prilepv/mcgl-arm64/blob/v1.8.6/docs/RELEASE-NOTES-1.8.6.md)
-- [Безопасность](https://github.com/prilepv/mcgl-arm64/blob/v1.8.6/SECURITY.md)
-- [Исходники и сборка](https://github.com/prilepv/mcgl-arm64/blob/v1.8.6/BUILDING.md)
+- [Релиз и SHA-256](https://github.com/prilepv/mcgl-arm64/releases/tag/v1.8.7)
+- [Описание выпуска](https://github.com/prilepv/mcgl-arm64/blob/v1.8.7/docs/RELEASE-NOTES-1.8.7.md)
+- [Безопасность](https://github.com/prilepv/mcgl-arm64/blob/v1.8.7/SECURITY.md)
+- [Исходники и сборка](https://github.com/prilepv/mcgl-arm64/blob/v1.8.7/BUILDING.md)
 
 Собственный код порта — MIT; сторонние компоненты сохраняют свои лицензии.
 Подробности — в THIRD-PARTY-NOTICES.md и встроенных уведомлениях.

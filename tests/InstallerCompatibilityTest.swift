@@ -46,6 +46,10 @@ struct InstallerCompatibilityTest {
             try fm.copyItem(at: resources.appendingPathComponent("PortSupport"), to: result)
             try fm.copyItem(at: original.appendingPathComponent("Minecraft.jar"), to: result.appendingPathComponent("Minecraft.jar"))
             try fm.copyItem(at: original.appendingPathComponent("bin/lwjgl_util.jar"), to: result.appendingPathComponent("bin/lwjgl_util.jar"))
+            let gson = original.appendingPathComponent("bin/gson-2.8.5.jar")
+            if fm.fileExists(atPath: gson.path) {
+                try fm.copyItem(at: gson, to: result.appendingPathComponent("bin/gson-2.8.5.jar"))
+            }
             if let jar { try fm.copyItem(at: jar, to: result.appendingPathComponent("bin/mcgl.jar")) }
             return result
         }

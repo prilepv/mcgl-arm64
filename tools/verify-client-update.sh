@@ -29,6 +29,7 @@ done
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result/modules" -framework CryptoKit \
     "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" \
     "$source_root/tests/InstallerCompatibilityTest.swift" -o "$result/installer-test"
 "$result/installer-test" "$app_root" "$original" "$updated" "$result/installer"
 for profile in original updated; do

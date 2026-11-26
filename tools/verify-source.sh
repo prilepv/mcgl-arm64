@@ -45,6 +45,7 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLAccountCard.swift" \
     "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/native-launcher/MCGLChangelog.swift" -o "$result_dir/launcher"
 swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
@@ -57,6 +58,7 @@ swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLAccountCard.swift" \
     "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/native-launcher/MCGLChangelog.swift" \
     "$source_root/tests/LauncherUITest.swift" -o "$result_dir/ui-test"
@@ -71,6 +73,7 @@ swiftc -D MCGL_LAUNCHER_TEST -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLAccountCard.swift" \
     "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/native-launcher/MCGLChangelog.swift" \
     "$source_root/tests/AccountsLayoutTest.swift" -o "$result_dir/accounts-layout-test"
@@ -158,7 +161,14 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     -module-cache-path "$result_dir/modules" -framework CryptoKit \
     "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" \
     "$source_root/tests/InstallerMigrationTest.swift" -o "$result_dir/installer-migration-test"
+swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
+    -module-cache-path "$result_dir/modules" -framework CryptoKit \
+    "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" \
+    "$source_root/tests/CompatibilityAdapterTest.swift" -o "$result_dir/adapter-delivery-test"
+"$result_dir/adapter-delivery-test"
 "$result_dir/installer-migration-test"
 xcrun clang -x objective-c -arch arm64 -mmacosx-version-min=14.0 \
     -I"$jdk_root/include" -I"$jdk_root/include/darwin" -framework Cocoa -framework OpenGL \
@@ -193,6 +203,12 @@ test_cp="$classes:$asm:$lwjgl"
     "$source_root"/performance-patch/src/local/mcgl/perf/*.java \
     "$source_root"/tests/*.java
 run_test() { "$jdk_root/bin/java" -Djava.awt.headless=true -cp "$test_cp" "$@"; }
+if [[ "$java_level" == 21 ]]; then
+    "$jdk_root/bin/javac" -encoding UTF-8 -cp "$test_cp" -d "$classes" \
+        "$source_root/tools/CreateCompatibilityPack.java" \
+        "$source_root"/tools/compatibility/*.java "$source_root"/tests/compatibility/*.java
+    run_test ClientMappingTest
+fi
 run_test PerformanceTest
 run_test ClassBytePatchTest
 run_test MeshIndexTest

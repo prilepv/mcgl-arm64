@@ -20,7 +20,7 @@ sha=$(shasum -a 256 "$4" | awk '{print $1}')
     ClientCompatibilityTest "$3/bin/mcgl.jar" "$4"
 for test in CompatibilityDeliveryTest SavedClientTest InstallerCompatibilityTest; do
     swiftc -parse-as-library -swift-version 5 -module-cache-path "$out/modules" \
-        "$source_root/native-launcher/MCGLInstaller.swift" "$source_root/tests/$test.swift" -o "$out/$test"
+        "$source_root/native-launcher/MCGLInstaller.swift" "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" "$source_root/tests/$test.swift" -o "$out/$test"
 done
 "$out/CompatibilityDeliveryTest" "$5" "$sha"
 "$out/SavedClientTest"

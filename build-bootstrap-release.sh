@@ -55,6 +55,7 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$script_dir/native-launcher/MCGLAccountCard.swift" \
     "$script_dir/native-launcher/MCGLAccountsDocumentView.swift" \
     "$script_dir/native-launcher/MCGLInstaller.swift" \
+    "$script_dir/native-launcher/MCGLCompatibilityAdapter.swift" \
     "$script_dir/native-launcher/MCGLLauncherUpdater.swift" \
     "$script_dir/native-launcher/MCGLChangelog.swift" \
     -o "$contents_dir/MacOS/MCGL ARM64 Launcher"

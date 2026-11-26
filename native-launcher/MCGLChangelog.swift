@@ -15,6 +15,9 @@ struct MCGLChangelogEntry {
 
 enum MCGLChangelog {
     static let entries: [MCGLChangelogEntry] = [
+        MCGLChangelogEntry(version: "1.8.7", date: "26 ноября 2026", title: "Совместимость MCGL", points: [
+            "Исправлен запуск с обновлённым MCGL и добавлено отдельное обновление модуля совместимости через лаунчер."
+        ]),
         MCGLChangelogEntry(version: "1.8.6", date: "13 ноября 2026", title: "Совместимость и исправления", points: [
             "Лаунчер пробует адаптировать обновления MCGL, если подписанный пакет совместимости ещё недоступен.",
             "Снижена нагрузка рендера Metal.",

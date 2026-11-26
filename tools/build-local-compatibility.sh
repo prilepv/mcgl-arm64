@@ -4,7 +4,7 @@ root=$(cd "$(dirname "$0")/.." && pwd -P)
 jdk=$1
 tools=$2
 "$jdk/bin/javac" -encoding UTF-8 -cp "$tools:$tools/asm-debug-all.jar" -d "$tools" \
-    "$root/tools/MCGLCompatibilityPack.java" "$root/tools/CreateCompatibilityPack.java" \
+    "$root/tools/MCGLAdapterArchive.java" "$root/tools/MCGLCompatibilityPack.java" "$root/tools/CreateCompatibilityPack.java" \
     "$root/tools/compatibility/"*.java "$root/tests/ClientLinkageTest.java"
 python3 - "$root/tools" "$tools/compatibility-guards.txt" <<'PY'
 from pathlib import Path

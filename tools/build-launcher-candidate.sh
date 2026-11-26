@@ -32,6 +32,7 @@ swiftc -swift-version 5 -target arm64-apple-macosx14.0 \
     "$source_root/native-launcher/MCGLAccountCard.swift" \
     "$source_root/native-launcher/MCGLAccountsDocumentView.swift" \
     "$source_root/native-launcher/MCGLInstaller.swift" \
+    "$source_root/native-launcher/MCGLCompatibilityAdapter.swift" \
     "$source_root/native-launcher/MCGLLauncherUpdater.swift" \
     "$source_root/native-launcher/MCGLChangelog.swift" \
     -o "$app/Contents/MacOS/MCGL ARM64 Launcher"

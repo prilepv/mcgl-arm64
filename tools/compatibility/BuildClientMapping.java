@@ -3,7 +3,7 @@ import java.util.*;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 
-/** Offline migration audit. Produces candidates, never installed automatically. */
+/** Infers candidate staging names. Installation still requires round-trip and patch audits. */
 public class BuildClientMapping {
     static Map<String,ClassNode> old,fresh;
     static Map<String,String> classes=new TreeMap<String,String>(),reverse=new TreeMap<String,String>();
@@ -17,6 +17,20 @@ public class BuildClientMapping {
     static void desc(String a,String b,String origin) {
         java.util.regex.Matcher x=java.util.regex.Pattern.compile("L([^;]+);").matcher(a),y=java.util.regex.Pattern.compile("L([^;]+);").matcher(b);
         while(x.find()&&y.find())pair(x.group(1),y.group(1),origin);
+    }
+    static boolean compatibleDescriptor(String reference, String candidate) {
+        java.util.regex.Matcher left = java.util.regex.Pattern.compile("L([^;]+);").matcher(reference);
+        java.util.regex.Matcher right = java.util.regex.Pattern.compile("L([^;]+);").matcher(candidate);
+        while (left.find()) {
+            if (!right.find()) return false;
+            String oldType = left.group(1), newType = right.group(1);
+            String mapped = classes.get(oldType), previous = reverse.get(newType);
+            if (mapped != null && !mapped.equals(newType) || previous != null && !previous.equals(oldType)) return false;
+            if (!old.containsKey(oldType) || !fresh.containsKey(newType)) {
+                if (!oldType.equals(newType)) return false;
+            }
+        }
+        return !right.find();
     }
     static List<AbstractInsnNode> instructions(MethodNode m) {
         List<AbstractInsnNode> list=new ArrayList<AbstractInsnNode>();for(AbstractInsnNode i:m.instructions.toArray())if(i.getOpcode()>=0)list.add(i);return list;
@@ -42,6 +56,7 @@ public class BuildClientMapping {
         else members.put(key,yn);
     }
     public static void main(String[] args)throws Exception {
+        classes.clear(); reverse.clear(); conflicts.clear();
         old=ClientShapeAudit.read(args[0]);fresh=ClientShapeAudit.read(args[1]);
         Map<String,List<String>> a=new HashMap<String,List<String>>(),b=new HashMap<String,List<String>>();
         for(ClassNode n:old.values())a.computeIfAbsent(ClientShapeAudit.shape(n,old,true),k->new ArrayList<String>()).add(n.name);
@@ -58,12 +73,14 @@ public class BuildClientMapping {
                 if(x.interfaces.size()==y.interfaces.size())for(int i=0;i<x.interfaces.size();i++)pair(x.interfaces.get(i),y.interfaces.get(i),x.name+" interface");
                 if(x.fields.size()==y.fields.size())for(int i=0;i<x.fields.size();i++) {
                     FieldNode f=x.fields.get(i),g=y.fields.get(i);
-                    if(f.access==g.access&&ClientShapeAudit.desc(f.desc,old).equals(ClientShapeAudit.desc(g.desc,fresh)))desc(f.desc,g.desc,x.name+" field "+i);
+                    if(f.access==g.access&&ClientShapeAudit.desc(f.desc,old).equals(ClientShapeAudit.desc(g.desc,fresh))
+                            && compatibleDescriptor(f.desc,g.desc))desc(f.desc,g.desc,x.name+" field "+i);
                 }
                 if(x.methods.size()!=y.methods.size())continue;
                 for(int i=0;i<x.methods.size();i++) {
                     MethodNode f=x.methods.get(i),g=y.methods.get(i);
-                    if(!ClientShapeAudit.method(f,old,false).equals(ClientShapeAudit.method(g,fresh,false)))continue;
+                    if(!ClientShapeAudit.method(f,old,false).equals(ClientShapeAudit.method(g,fresh,false))
+                            || !compatibleDescriptor(f.desc,g.desc))continue;
                     desc(f.desc,g.desc,x.name+" method "+i);
                     if(!ClientShapeAudit.method(f,old,true).equals(ClientShapeAudit.method(g,fresh,true)))continue;
                     List<AbstractInsnNode> u=instructions(f),v=instructions(g);
@@ -95,10 +112,17 @@ public class BuildClientMapping {
         List<String> classRecords=new ArrayList<String>();
         for(String line:output){String[] p=line.split("\t");if(p[0].equals("C"))classRecords.add(line);else members.put(p[0]+"\t"+p[1]+"\t"+p[2]+"\t"+p[3],p[4]);}
         for(Map.Entry<String,String> e:classes.entrySet()) {
-            ClassNode x=old.get(e.getKey()),y=fresh.get(e.getValue());if(x.methods.size()!=y.methods.size())continue;
+            ClassNode x=old.get(e.getKey()),y=fresh.get(e.getValue());
+            Map<String,List<MethodNode>> oldShapes = methodShapes(x, old), newShapes = methodShapes(y, fresh);
             for(int i=0;i<x.methods.size();i++) {
-                MethodNode f=x.methods.get(i),g=y.methods.get(i);
-                if(!ClientShapeAudit.method(f,old,true).equals(ClientShapeAudit.method(g,fresh,true)))continue;
+                MethodNode f=x.methods.get(i),g=null;
+                String shape = ClientShapeAudit.method(f,old,true);
+                List<MethodNode> matches = newShapes.get(shape);
+                if (oldShapes.get(shape).size() == 1 && matches != null && matches.size() == 1) g = matches.get(0);
+                else if (x.methods.size() == y.methods.size()
+                        && shape.equals(ClientShapeAudit.method(y.methods.get(i),fresh,true))) g = y.methods.get(i);
+                if(g == null || !mapDesc(f.desc).equals(g.desc))continue;
+                member(members,"M",x.name,f.name,f.desc,y.name,g.name,g.desc,x.name+" unique body");
                 List<AbstractInsnNode> a0=instructions(f),b0=instructions(g);if(a0.size()!=b0.size())continue;
                 for(int j=0;j<a0.size();j++) {
                     AbstractInsnNode p=a0.get(j),q=b0.get(j);String origin=x.name+"."+f.name+" "+j;
@@ -111,5 +135,13 @@ public class BuildClientMapping {
         Files.write(Paths.get(args[2]),output);
         Files.write(Paths.get(args[2]+".conflicts"),conflicts);
         System.out.println("MAPPING_CANDIDATE classes="+classes.size()+" records="+output.size()+" conflicts="+conflicts.size());
+    }
+
+    private static Map<String,List<MethodNode>> methodShapes(ClassNode type, Map<String,ClassNode> hierarchy) {
+        Map<String,List<MethodNode>> result = new HashMap<>();
+        for (MethodNode method : type.methods) {
+            result.computeIfAbsent(ClientShapeAudit.method(method,hierarchy,true), key -> new ArrayList<>()).add(method);
+        }
+        return result;
     }
 }

@@ -61,3 +61,32 @@ downloaded pack cache.
 The fallback needs a previously staged trusted reference. It can decline an
 update with incompatible bytecode and cannot verify live server or rendering
 behavior. The signed pack workflow still handles those releases.
+
+## Independently updated adapter
+
+Launcher builds starting at 264 can download executable Java patch tools from
+`compatibility/adapters/v1/core-17/latest.adapter`. This channel uses a separate
+`MCGLAD1\n` envelope. Ed25519 authenticates the entire payload, comprising a
+four-byte big-endian JSON length, the JSON manifest, and the tools archive.
+The manifest binds the archive SHA-256, revision, minimum launcher build,
+Java version, installer protocol, engine ABI, and both packaged rendering-library
+SHA-256 values. The existing publisher public key is pinned in the launcher.
+
+The bundled bootstrap validates archive paths, entry types, required tools,
+and expanded size before any downloaded class executes. Extraction and every
+preparation attempt use disposable directories. The application bundle supplies
+Java, ASM and the rendering libraries. Only a fully prepared and audited client
+can be installed. The module is confirmed after client installation and its
+receipt are complete. Failure retries the last verified tools, then bundled
+tools. Failed revisions are skipped for the affected official-client hash.
+Cached signatures are rechecked before offline use. The current and previous
+confirmed signed archives are retained for rollback.
+
+Build a module from a prepared application with
+`bash tools/build-compatibility-adapter.sh PRIVATE_KEY APP REVISION MINIMUM_BUILD /absolute/NEW.adapter`.
+Keep its immutable revision file beside `latest.adapter` on the compatibility
+branch. Validate it with `CompatibilityAdapterTest.swift` and the fixture-based
+`CompatibilityAdapterInstallTest.swift` before publication. This channel can
+update patch code, while new graphics-library APIs still require an application
+release. Module signing authorizes executable code, so publisher keys retain
+the same private storage requirements as application signing tools.
